@@ -10,6 +10,7 @@ import (
 
 	"github.com/open-uem/ent"
 	"github.com/open-uem/ent/agent"
+	"github.com/open-uem/ent/predicate"
 	"github.com/open-uem/ent/profile"
 	"github.com/open-uem/ent/profileissue"
 	"github.com/open-uem/ent/site"
@@ -20,71 +21,30 @@ import (
 	"github.com/open-uem/nats"
 )
 
-func (m *Model) GetProfilesAppliedToAll(siteID int, tenantID int) ([]*ent.Profile, error) {
-	return m.Client.Profile.Query().WithTasks().
-		Where(
-			profile.DisabledEQ(false),
-			profile.ApplyToAll(true),
-			profile.Or(
-				profile.And(profile.Not(profile.HasTenant()), profile.Not(profile.HasSite())),
-				profile.HasTenantWith(tenant.ID(tenantID)),
-				profile.HasSiteWith(site.ID(siteID)),
-			),
-		).All(context.Background())
+// Profile scope is the intersection of explicit organization and site limits.
+// Unscoped profiles remain globally managed templates; selecting a profile ID
+// never bypasses scope or assignment checks.
+func profileScope(siteID, tenantID int) predicate.Profile {
+	return profile.And(
+		profile.Or(profile.Not(profile.HasTenant()), profile.HasTenantWith(tenant.ID(tenantID))),
+		profile.Or(profile.Not(profile.HasSite()), profile.HasSiteWith(site.ID(siteID))),
+	)
 }
 
-func (m *Model) GetProfilesAppliedToAllFilteredByProfile(siteID int, profileID int) ([]*ent.Profile, error) {
-	return m.Client.Profile.Query().WithTasks().Where(
-		profile.ID(profileID),
-		profile.DisabledEQ(false),
-		profile.ApplyToAll(true),
-	).All(context.Background())
+func (m *Model) GetProfilesAppliedToAll(siteID, tenantID int) ([]*ent.Profile, error) {
+	return m.Client.Profile.Query().WithTasks().Where(profile.DisabledEQ(false), profile.ApplyToAll(true), profileScope(siteID, tenantID)).All(context.Background())
+}
+
+func (m *Model) GetProfilesAppliedToAllFilteredByProfile(siteID, tenantID, profileID int) ([]*ent.Profile, error) {
+	return m.Client.Profile.Query().WithTasks().Where(profile.ID(profileID), profile.DisabledEQ(false), profile.ApplyToAll(true), profileScope(siteID, tenantID)).All(context.Background())
 }
 
 func (m *Model) GetProfilesAppliedToAgent(siteID int, agentID string, tenantID int) ([]*ent.Profile, error) {
-	agent, err := m.Client.Agent.Query().WithTags().Where(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))).Only(context.Background())
-	if err != nil {
-		return nil, err
-	}
-
-	if agent.Edges.Tags != nil {
-		tags := []int{}
-
-		for _, tag := range agent.Edges.Tags {
-			tags = append(tags, tag.ID)
-		}
-
-		return m.Client.Profile.Query().WithTasks().Where(
-			profile.DisabledEQ(false),
-			profile.HasTagsWith(tag.IDIn(tags...)),
-			profile.Or(
-				profile.HasSiteWith(site.ID(siteID)),
-				profile.HasTenantWith(tenant.ID(tenantID)),
-				profile.And(profile.Not(profile.HasTenant()), profile.Not(profile.HasSite())),
-			),
-		).All(context.Background())
-	}
-
-	return []*ent.Profile{}, nil
+	return m.Client.Profile.Query().WithTasks().Where(profile.DisabledEQ(false), profileScope(siteID, tenantID), profile.HasTagsWith(tag.HasOwnerWith(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))))).All(context.Background())
 }
 
-func (m *Model) GetProfilesAppliedToAgentFilteredByProfile(siteID int, agentID string, profileID int) ([]*ent.Profile, error) {
-	agent, err := m.Client.Agent.Query().WithTags().Where(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))).Only(context.Background())
-	if err != nil {
-		return nil, err
-	}
-
-	if agent.Edges.Tags != nil {
-		tags := []int{}
-
-		for _, tag := range agent.Edges.Tags {
-			tags = append(tags, tag.ID)
-		}
-
-		return m.Client.Profile.Query().WithTasks().Where(profile.ID(profileID), profile.DisabledEQ(false), profile.HasTagsWith(tag.IDIn(tags...))).All(context.Background())
-	}
-
-	return []*ent.Profile{}, nil
+func (m *Model) GetProfilesAppliedToAgentFilteredByProfile(siteID int, agentID string, tenantID, profileID int) ([]*ent.Profile, error) {
+	return m.Client.Profile.Query().WithTasks().Where(profile.ID(profileID), profile.DisabledEQ(false), profileScope(siteID, tenantID), profile.HasTagsWith(tag.HasOwnerWith(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))))).All(context.Background())
 }
 
 func (m *Model) SaveProfileApplicationIssues(p nats.ProfileReport) error {

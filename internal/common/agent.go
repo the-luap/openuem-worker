@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,13 @@ import (
 )
 
 func (w *Worker) SubscribeToAgentWorkerQueues() error {
+	switch os.Getenv("OPENUEM_INDIVIDUAL_AGENT_MODE") {
+	case "true":
+		return w.SubscribeIndividualAgentQueues()
+	case "", "false":
+	default:
+		return fmt.Errorf("OPENUEM_INDIVIDUAL_AGENT_MODE must be true or false")
+	}
 	_, err := w.NATSConnection.QueueSubscribe("report", "openuem-agents", w.ReportReceivedHandler)
 	if err != nil {
 		log.Printf("[ERROR]: could not subscribe to report NATS message, reason: %v", err)
@@ -417,12 +425,12 @@ func (w *Worker) GetAppliedProfiles(cfg openuem_nats.CfgProfiles) ([]*ent.Profil
 
 		return append(profilesAppliedToAll, profilesAppliedToAgent...), nil
 	} else {
-		profilesAppliedToAll, err := w.Model.GetProfilesAppliedToAllFilteredByProfile(sites[0].ID, cfg.ProfileID)
+		profilesAppliedToAll, err := w.Model.GetProfilesAppliedToAllFilteredByProfile(sites[0].ID, tenant.ID, cfg.ProfileID)
 		if err != nil {
 			return nil, err
 		}
 
-		profilesAppliedToAgent, err := w.Model.GetProfilesAppliedToAgentFilteredByProfile(sites[0].ID, cfg.AgentID, cfg.ProfileID)
+		profilesAppliedToAgent, err := w.Model.GetProfilesAppliedToAgentFilteredByProfile(sites[0].ID, cfg.AgentID, tenant.ID, cfg.ProfileID)
 		if err != nil {
 			return nil, err
 		}

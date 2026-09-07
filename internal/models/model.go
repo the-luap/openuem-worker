@@ -10,11 +10,11 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	ent "github.com/open-uem/ent"
-	"github.com/open-uem/ent/migrate"
 )
 
 type Model struct {
 	Client *ent.Client
+	DB     *sql.DB
 }
 
 func New(dbUrl string) (*Model, error) {
@@ -26,13 +26,15 @@ func New(dbUrl string) (*Model, error) {
 	}
 
 	model.Client = ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	model.DB = db
 
 	// TODO Automatic migrations only in development
 	ctx := context.Background()
 	if os.Getenv("ENV") != "prod" {
-		if err := model.Client.Schema.Create(ctx,
-			migrate.WithDropIndex(true),
-			migrate.WithDropColumn(true)); err != nil {
+		// Startup must not remove columns or indexes owned by additive identity
+		// migrations or another component version in a rolling deployment.
+		if err := model.Client.Schema.Create(ctx); err != nil {
+			_ = db.Close()
 			return nil, err
 		}
 	}
