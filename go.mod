@@ -59,4 +59,4 @@ require (
 	golang.org/x/tools v0.48.0 // indirect
 )
 
-replace github.com/open-uem/nats => github.com/the-luap/openuem-nats v0.11.1-0.20260908154109-4e6e26103fd9
+replace github.com/open-uem/nats => github.com/the-luap/openuem-nats v0.11.1-0.20260908155359-249bb9d5e690

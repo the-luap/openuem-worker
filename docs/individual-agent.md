@@ -23,7 +23,7 @@ profile. Startup schema creation no longer drops columns or indexes owned by a
 newer component's additive migrations.
 
 The module pins the published shared implementation from
-`the-luap/openuem-nats` at `4e6e26103fd9` using a Go module replacement. Its
+`the-luap/openuem-nats` at `249bb9d5e690` using a Go module replacement. Its
 [CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34246345384), including
 TLS/NKey reconnection and native Windows key-file ACL tests. Normal
 builds and CI do not require a sibling checkout or a local `go.work` file.
