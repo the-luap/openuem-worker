@@ -2,10 +2,16 @@ package common
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,11 +104,41 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 	public, _ := keys.Broker.PublicKey()
 	workerKey, _ := nkeys.CreateUser()
 	workerPublic, _ := workerKey.PublicKey()
+	monitorKey, _ := nkeys.CreateUser()
+	monitorPublic, _ := monitorKey.PublicKey()
+	deniedKey, _ := nkeys.CreateUser()
+	deniedPublic, _ := deniedKey.PublicKey()
+	certServer := httptest.NewTLSServer(http.NotFoundHandler())
+	certificate := certServer.TLS.Certificates[0]
+	roots := x509.NewCertPool()
+	roots.AddCert(certServer.Certificate())
+	caPath := filepath.Join(t.TempDir(), "broker-ca.pem")
+	if err = os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certServer.Certificate().Raw}), 0644); err != nil {
+		t.Fatal(err)
+	}
+	certServer.Close()
+	writeSeed := func(key nkeys.KeyPair) string {
+		t.Helper()
+		seed, _ := key.Seed()
+		defer clear(seed)
+		path := filepath.Join(t.TempDir(), "service.seed")
+		if err := os.WriteFile(path, seed, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	workerRequests := []string{}
+	for _, operation := range enrollment.Operations() {
+		workerRequests = append(workerRequests, "uem.v1.agent.*.request."+operation)
+	}
 	policy, _ := enrollment.DeviceSubjects(issued.DeviceID)
-	broker, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true, Nkeys: []*server.NkeyUser{
-		{Nkey: public, Permissions: &server.Permissions{Publish: &server.SubjectPermission{Allow: policy.Publish}, Subscribe: &server.SubjectPermission{Allow: policy.Subscribe}}},
-		{Nkey: workerPublic},
-	}})
+	broker, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}, Nkeys: []*server.NkeyUser{
+			{Nkey: public, Permissions: &server.Permissions{Publish: &server.SubjectPermission{Allow: policy.Publish}, Subscribe: &server.SubjectPermission{Allow: policy.Subscribe}}},
+			{Nkey: workerPublic, Permissions: &server.Permissions{Publish: &server.SubjectPermission{Deny: []string{">"}}, Subscribe: &server.SubjectPermission{Allow: workerRequests}, Response: &server.ResponsePermission{MaxMsgs: 1, Expires: 30 * time.Second}}},
+			{Nkey: deniedPublic, Permissions: &server.Permissions{Publish: &server.SubjectPermission{Deny: []string{">"}}, Subscribe: &server.SubjectPermission{Allow: []string{"uem.v1.agent.*.request.agentconfig"}}}},
+			{Nkey: monitorPublic},
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,22 +147,53 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 	if !broker.ReadyForConnections(5 * time.Second) {
 		t.Fatal("broker did not start")
 	}
-	workerConnection, err := nats.Connect(broker.ClientURL(), nats.Nkey(workerPublic, workerKey.Sign), nats.NoReconnect())
+	workerConnection, err := nats.Connect(broker.ClientURL(), nats.Nkey(monitorPublic, monitorKey.Sign), nats.Secure(&tls.Config{RootCAs: roots}), nats.NoReconnect())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer workerConnection.Close()
-	worker := &Worker{Model: model, NATSConnection: workerConnection}
-	if err = worker.SubscribeToAgentWorkerQueues(); err != nil {
-		t.Fatal(err)
+	t.Setenv("OPENUEM_AGENT_DATABASE_URL", u.String())
+	t.Setenv("OPENUEM_AGENT_BROKER_URLS", broker.ClientURL())
+	t.Setenv("OPENUEM_AGENT_WORKER_KEY_FILE", writeSeed(workerKey))
+	t.Setenv("OPENUEM_AGENT_BROKER_CA_FILE", caPath)
+	t.Setenv("OPENUEM_AGENT_BROKER_CLIENT_CERT_FILE", "")
+	t.Setenv("OPENUEM_AGENT_BROKER_CLIENT_KEY_FILE", "")
+	worker := &Worker{}
+	if configured, err := worker.ConfigureIndividualAgentService(); err != nil || !configured {
+		t.Fatal("individual service configuration failed", err)
 	}
+	workerContext, stopWorker := context.WithCancel(ctx)
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.RunIndividualAgentWorker(workerContext) }()
+	t.Cleanup(func() {
+		stopWorker()
+		select {
+		case err := <-workerResult:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(8 * time.Second):
+			t.Error("individual worker did not stop")
+		}
+	})
 	prefix, _ := enrollment.ReplyPrefix(issued.DeviceID)
-	client, err := nats.Connect(broker.ClientURL(), nats.Nkey(public, keys.Broker.Sign), nats.CustomInboxPrefix(prefix), nats.NoReconnect())
+	client, err := nats.Connect(broker.ClientURL(), nats.Nkey(public, keys.Broker.Sign), nats.CustomInboxPrefix(prefix), nats.Secure(&tls.Config{RootCAs: roots}), nats.NoReconnect())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 	subject, _ := enrollment.RequestSubject(issued.DeviceID, "wingetcfg.exclude")
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		response, err := client.Request(subject, []byte(`{}`), time.Second)
+		if err == nil && strings.Contains(string(response.Data), "denied") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("individual worker subscriptions did not become ready", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	count := func() int {
 		t.Helper()
 		n, err := model.Client.WingetConfigExclusion.Query().Where(wingetconfigexclusion.HasOwnerWith(agent.ID(issued.DeviceID))).Count(ctx)
@@ -179,5 +246,15 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 	// every new request must observe persisted revocation.
 	if response := requestResult(issued.DeviceID, "after-revocation"); !strings.Contains(string(response), "denied") || count() != 1 {
 		t.Fatal("revoked sender reached mutation")
+	}
+	// A service with only some permitted queues must return a failure instead
+	// of remaining alive with an incomplete set of subscriptions.
+	partial := *worker.IndividualAgentService
+	partial.KeyFile = writeSeed(deniedKey)
+	badWorker := &Worker{DBUrl: u.String(), IndividualAgentService: &partial}
+	badContext, cancelBad := context.WithTimeout(ctx, 8*time.Second)
+	defer cancelBad()
+	if err = badWorker.RunIndividualAgentWorker(badContext); err == nil || badContext.Err() != nil {
+		t.Fatal("partial subscription permissions did not stop worker", err)
 	}
 }

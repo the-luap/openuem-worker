@@ -26,6 +26,9 @@ import (
 func (w *Worker) SubscribeToAgentWorkerQueues() error {
 	switch os.Getenv("OPENUEM_INDIVIDUAL_AGENT_MODE") {
 	case "true":
+		if w.IndividualAgentService == nil {
+			return fmt.Errorf("individual agent service credentials were not configured")
+		}
 		return w.SubscribeIndividualAgentQueues()
 	case "", "false":
 	default:

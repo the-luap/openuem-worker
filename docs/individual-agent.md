@@ -23,22 +23,63 @@ profile. Startup schema creation no longer drops columns or indexes owned by a
 newer component's additive migrations.
 
 The module pins the published shared implementation from
-`the-luap/openuem-nats` at `2af211c88d57` using a Go module replacement. Normal
+`the-luap/openuem-nats` at `6940f11772a9` using a Go module replacement. Its
+[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34172052566), including
+TLS/NKey reconnection and native Windows key-file ACL tests. Normal
 builds and CI do not require a sibling checkout or a local `go.work` file.
+
+## Private service connection
+
+Both `openuem-worker agents start` and the installed Linux/Windows agent-worker
+services recognize individual mode before reading legacy certificate/INI settings.
+Set these variables in the protected service environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `OPENUEM_INDIVIDUAL_AGENT_MODE=true` | Enable the individual runtime and versioned queues |
+| `OPENUEM_AGENT_DATABASE_URL` | PostgreSQL URL for the existing console database and initialized enrollment registry |
+| `OPENUEM_AGENT_BROKER_URLS` | Explicit comma-separated private `tls://` broker origins |
+| `OPENUEM_AGENT_WORKER_KEY_FILE` | Protected NKey user seed assigned to the trusted agent worker |
+| `OPENUEM_AGENT_BROKER_CA_FILE` | Optional private broker CA bundle; otherwise system roots |
+| `OPENUEM_AGENT_BROKER_CLIENT_CERT_FILE` | Optional TLS client certificate if the private broker requires mutual TLS |
+| `OPENUEM_AGENT_BROKER_CLIENT_KEY_FILE` | Matching protected TLS private key |
+| `ENCRYPTION_MASTER_KEY` | Existing encrypted task-field key, when those tasks are used |
+
+Private files must pass the library's Unix ownership/mode or Windows ACL checks.
+The connection always verifies TLS and authenticates the service NKey; it cannot
+discover a different broker, use cleartext, or fall back to shared certificates.
+The worker requires registry initialization. Missing configuration, invalid files,
+untrusted TLS and denied subscriptions stop startup. Asynchronous messaging or
+permission failures return a service error, allowing supervised restart. Ordinary
+broker disconnects reconnect with the same configured origins and restore queues.
+
+Give this separate trusted user only the versioned request subscriptions
+`uem.v1.agent.*.request.<operation>` listed by `enrollment.Operations()`. Deny normal
+publishing and grant one temporary response per received request. Do not grant
+this worker auth-callout, system-account or consumer-management access. Broker
+service provisioning must keep its private seed out of endpoint packages.
+
+Shutdown stops accepting requests and waits for in-flight handlers before closing
+the database. Preflight identity/scope queries observe cancellation; some inherited
+deployment/inventory handlers still use their original background contexts. A
+strict time bound across every inherited handler is additional operational work.
 
 On Linux, run the database and real-broker checks against an isolated database:
 
 ```sh
-AGENT_ENROLLMENT_TEST_DATABASE_URL='<isolated PostgreSQL DSN>' go test -race -count=1 ./internal/common ./internal/models
+AGENT_ENROLLMENT_TEST_DATABASE_URL='<isolated PostgreSQL DSN>' go test -race -count=1 ./internal/common ./internal/models ./internal/commands
 ```
 
 Tests create and drop unique schemas. They cover canonical body identity,
 organization/site denial, profile selection, task ownership, preservation of
-newer schema fields, and real NATS messages reaching the actual deployment
-exclusion handler. Forged reply addresses, foreign body IDs and a revoked sender
+newer schema fields, and the production worker runtime connecting with a protected
+service NKey to a real TLS NATS server. Messages reach the actual deployment
+exclusion handler. Partial subscription permissions stop the runtime, and CLI
+tests verify startup no longer requires legacy connection flags. Forged reply
+addresses, foreign body IDs and a revoked sender
 cannot mutate inventory. Linux and Windows cross-builds are also required.
 
-This change implements the worker boundary. The production NKey service connection,
+This change implements the worker boundary and service runtime. The production
 broker account configuration, console issuance UI, signed bootstrap/installers,
 agent key storage and native-agent release integration are still being implemented.
 The environment flag by itself is not a complete secure deployment.

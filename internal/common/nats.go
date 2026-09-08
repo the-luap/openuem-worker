@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -10,14 +11,19 @@ import (
 
 func (w *Worker) StartNATSConnectJob(queueSubscribe func() error) error {
 	var err error
+	if w.IndividualAgentService != nil {
+		return errors.New("individual agent service requires its managed worker runtime")
+	}
 
 	w.NATSConnection, err = nats.ConnectWithNATS(w.NATSServers, w.ClientCertPath, w.ClientKeyPath, w.CACertPath, "")
 	if err == nil {
-		if err := queueSubscribe(); err == nil {
+		if err = queueSubscribe(); err == nil {
 			return err
 		}
+		w.NATSConnection.Close()
+		w.NATSConnection = nil
 	}
-	log.Printf("[ERROR]: could not connect to NATS servers in %s, reason: %v\n", w.NATSServers, err)
+	log.Print("[ERROR]: worker broker connection or subscription failed")
 
 	w.NATSConnectJob, err = w.TaskScheduler.NewJob(
 		gocron.DurationJob(

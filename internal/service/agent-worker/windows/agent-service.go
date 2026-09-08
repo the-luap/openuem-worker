@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/go-co-op/gocron/v2"
@@ -16,6 +17,28 @@ func main() {
 
 	w := common.NewWorker("openuem-agent-worker.txt")
 	s := utils.NewOpenUEMWindowsService()
+	configured, err := w.ConfigureIndividualAgentService()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if configured {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan struct{})
+		s.ServiceStart = func() {
+			go func() {
+				defer close(done)
+				if err := w.RunIndividualAgentWorker(ctx); err != nil {
+					log.Fatal(err)
+				}
+			}()
+		}
+		s.ServiceStop = func() { cancel(); <-done }
+		if err := svc.Run("openuem-agent-worker", s); err != nil {
+			log.Print("[ERROR]: individual agent Windows service failed")
+		}
+		return
+	}
 
 	// Start Task Scheduler
 	w.TaskScheduler, err = gocron.NewScheduler()

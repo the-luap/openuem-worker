@@ -15,6 +15,12 @@ import (
 
 func (w *Worker) GenerateCommonWorkerConfig(c string) error {
 	var err error
+	if c == "agent-worker" {
+		configured, err := w.ConfigureIndividualAgentService()
+		if err != nil || configured {
+			return err
+		}
+	}
 
 	// Get conf file
 	configFile := utils.GetConfigFile()

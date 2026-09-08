@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -13,6 +14,14 @@ import (
 )
 
 func AgentWorker() *cli.Command {
+	flags := CommonFlags()
+	for _, flag := range flags {
+		if value, ok := flag.(*cli.StringFlag); ok && (value.Name == "nats-servers" || value.Name == "dburl") {
+			// Individual mode reads its separate protected service environment.
+			// Legacy requirements are checked before loading certificate files.
+			value.Required = false
+		}
+	}
 	return &cli.Command{
 		Name:  "agents",
 		Usage: "Manage OpenUEM's Agents worker",
@@ -21,7 +30,7 @@ func AgentWorker() *cli.Command {
 				Name:   "start",
 				Usage:  "Start an OpenUEM's Agents worker",
 				Action: startAgentsWorker,
-				Flags:  CommonFlags(),
+				Flags:  flags,
 			},
 			{
 				Name:   "stop",
@@ -37,8 +46,19 @@ func startAgentsWorker(cCtx *cli.Context) error {
 
 	worker := common.NewWorker("")
 
-	if err := worker.CheckCLICommonRequisites(cCtx); err != nil {
-		log.Printf("[ERROR]: could not generate config for Agents Worker: %v", err)
+	configured, err := worker.ConfigureIndividualAgentService()
+	if err != nil {
+		return err
+	}
+	if configured {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+		defer stop()
+		return worker.RunIndividualAgentWorker(ctx)
+	}
+	if !configured {
+		if err := worker.CheckCLICommonRequisites(cCtx); err != nil {
+			return err
+		}
 	}
 
 	if err := os.WriteFile("PIDFILE", []byte(strconv.Itoa(os.Getpid())), 0666); err != nil {

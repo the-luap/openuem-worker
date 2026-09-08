@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -129,20 +130,37 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 		"wingetcfg.deploy": w.WinGetCfgDeploymentReport, "wingetcfg.exclude": w.WinGetCfgMarkPackageAsExcluded, "wingetcfg.report": w.ProfileReportResponseHandler,
 	}
 	var subscriptions []*nats.Subscription
+	requestContext, cancelRequests := context.WithCancel(context.Background())
+	var lifecycle sync.Mutex
+	var requests sync.WaitGroup
+	closed := false
 	rollback := func() {
+		lifecycle.Lock()
+		closed = true
+		cancelRequests()
+		lifecycle.Unlock()
 		for _, subscription := range subscriptions {
 			_ = subscription.Unsubscribe()
 		}
+		requests.Wait()
 	}
 	for _, operation := range enrollment.Operations() {
 		handler := handlers[operation]
 		subscription, err := w.NATSConnection.QueueSubscribe("uem.v1.agent.*.request."+operation, "openuem-individual-agents", func(message *nats.Msg) {
+			lifecycle.Lock()
+			if closed {
+				lifecycle.Unlock()
+				return
+			}
+			requests.Add(1)
+			lifecycle.Unlock()
+			defer requests.Done()
 			id, actual, err := enrollment.ParseRequestSubject(message.Subject)
 			if err != nil || actual != operation || !enrollment.ValidReply(id, message.Reply) {
 				return
 			}
 			deny := func() { _ = message.Respond([]byte(`{"error":"agent request denied"}`)) }
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(requestContext, 5*time.Second)
 			defer cancel()
 			identity, err := access.ActiveIdentity(ctx, id)
 			if err != nil {
@@ -176,5 +194,10 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 		rollback()
 		return err
 	}
+	if err = w.NATSConnection.LastError(); err != nil {
+		rollback()
+		return errIndividualRequest
+	}
+	w.stopIndividualRequests = rollback
 	return nil
 }

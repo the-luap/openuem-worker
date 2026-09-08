@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -15,6 +16,18 @@ import (
 func main() {
 	var err error
 	w := common.NewWorker("openuem-agent-worker")
+	configured, err := w.ConfigureIndividualAgentService()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if configured {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := w.RunIndividualAgentWorker(ctx); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	// Start Task Scheduler
 	w.TaskScheduler, err = gocron.NewScheduler()

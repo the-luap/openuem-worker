@@ -47,6 +47,8 @@ type Worker struct {
 	Replicas               int
 	Jetstream              jetstream.JetStream
 	EncryptionMasterKey    string
+	IndividualAgentService *openuem_nats.ServiceConnection
+	stopIndividualRequests func()
 }
 
 func NewWorker(logName string) *Worker {

@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -10,6 +11,9 @@ import (
 
 func (w *Worker) CheckCLICommonRequisites(cCtx *cli.Context) error {
 	var err error
+	if cCtx.String("dburl") == "" || cCtx.String("nats-servers") == "" {
+		return errors.New("legacy worker requires dburl and nats-servers")
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
