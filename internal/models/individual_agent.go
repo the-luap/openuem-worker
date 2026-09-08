@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/open-uem/ent"
@@ -11,10 +12,43 @@ import (
 	"github.com/open-uem/ent/tag"
 	"github.com/open-uem/ent/task"
 	"github.com/open-uem/ent/tenant"
+	"github.com/open-uem/nats/enrollment"
 	"github.com/open-uem/nats/enrollment/registry"
 )
 
 var ErrAgentScope = errors.New("agent request scope is not authorized")
+
+// AuthorizeIndividualRotation holds the inventory row, all scope edges and site
+// ownership until the caller commits registry delivery/result and audit. Locking
+// the parent row FOR UPDATE also prevents a concurrent FK-backed edge insertion;
+// locking existing edges prevents their deletion during authorization.
+// Registry callers must take their identity lock before these inventory locks.
+func (m *Model) AuthorizeIndividualRotation(ctx context.Context, tx *sql.Tx, identity registry.Identity) error {
+	if tx == nil || identity.Platform != "macos" || !enrollment.ValidDeviceID(identity.ID) || identity.TenantID <= 0 || identity.SiteID <= 0 {
+		return ErrAgentScope
+	}
+	var id string
+	if err := tx.QueryRowContext(ctx, `SELECT oid FROM agents WHERE oid=$1 FOR UPDATE`, identity.ID).Scan(&id); err != nil {
+		return ErrAgentScope
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT e.site_id,s.tenant_sites FROM site_agents e JOIN sites s ON s.id=e.site_id WHERE e.agent_id=$1 ORDER BY e.site_id LIMIT 2 FOR SHARE OF e,s`, identity.ID)
+	if err != nil {
+		return ErrAgentScope
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var siteID, tenantID int
+		if rows.Scan(&siteID, &tenantID) != nil || siteID != identity.SiteID || tenantID != identity.TenantID {
+			return ErrAgentScope
+		}
+		count++
+	}
+	if rows.Err() != nil || count != 1 {
+		return ErrAgentScope
+	}
+	return nil
+}
 
 // AuthorizeIndividualRequest checks existing desktop records and every requested
 // profile/task against the durable enrollment scope. First inventory, hardware

@@ -46,7 +46,7 @@ func TestIndividualRecoveryPayloadRejectsForeignAndNoncanonicalRequests(t *testi
 	}
 }
 
-func testIndividualRecoveryTransport(t *testing.T, db *sql.DB, client *nats.Conn, issued enrollment.Response, keys *enrollment.Keys, platform string) []byte {
+func testIndividualRecoveryTransport(t *testing.T, db *sql.DB, client *nats.Conn, issued enrollment.Response, keys *enrollment.Keys, platform string) ([]byte, []byte) {
 	t.Helper()
 	key, err := enrollment.NewRecoveryRecipientKey()
 	if err != nil {
@@ -69,7 +69,13 @@ func testIndividualRecoveryTransport(t *testing.T, db *sql.DB, client *nats.Conn
 		if !strings.Contains(string(data), "denied") {
 			t.Fatal("Windows agent obtained Mac recipient challenge")
 		}
-		return nil
+		rotationSubject, _ := enrollment.RequestSubject(issued.DeviceID, "rotation")
+		poll, _ := json.Marshal(enrollment.RotationRequest{Version: 1, Protocol: enrollment.RotationProtocol, AgentID: issued.DeviceID, Action: "poll", RecipientID: uuid.NewString()})
+		response, err := client.Request(rotationSubject, poll, 2*time.Second)
+		if err != nil || !strings.Contains(string(response.Data), "denied") {
+			t.Fatal("Windows agent reached FileVault rotation", err)
+		}
+		return nil, nil
 	}
 	reply, err := enrollment.DecodeRecoveryReply(data)
 	if err != nil || reply.Registration == nil {
@@ -148,6 +154,7 @@ func testIndividualRecoveryTransport(t *testing.T, db *sql.DB, client *nats.Conn
 	if json.Unmarshal(receipt, &stored) != nil || stored.Outcome != "invalid" || enrollment.VerifyRecoveryResult(stored, cert, time.Now()) != nil {
 		t.Fatal("worker lost signed outcome")
 	}
+	rotationPoll := testIndividualRotationTransport(t, db, client, issued, keys, key, *r, cert)
 	if _, err = db.Exec(`ALTER TABLE uem_agent_recovery_tasks RENAME TO isolated_missing_recovery_tasks`); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +162,7 @@ func testIndividualRecoveryTransport(t *testing.T, db *sql.DB, client *nats.Conn
 	configBody, _ := json.Marshal(openuem.RemoteConfigRequest{AgentID: issued.DeviceID})
 	configReply, err := client.Request(configSubject, configBody, 2*time.Second)
 	var config openuem.Config
-	if err != nil || json.Unmarshal(configReply.Data, &config) != nil || config.RecoveryTaskVersion != 0 || config.HardwareInventoryVersion != 1 {
+	if err != nil || json.Unmarshal(configReply.Data, &config) != nil || config.RecoveryTaskVersion != 0 || config.RotationTaskVersion != 0 || config.HardwareInventoryVersion != 1 {
 		t.Fatal("missing recovery schema advertised capability", err)
 	}
 	if !strings.Contains(string(exchange(poll)), "denied") {
@@ -165,5 +172,5 @@ func testIndividualRecoveryTransport(t *testing.T, db *sql.DB, client *nats.Conn
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(poll)
-	return encoded
+	return encoded, rotationPoll
 }

@@ -266,7 +266,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		t.Fatal(err)
 	}
 	var config openuem.Config
-	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") {
+	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == 1) != (platform == "macos") {
 		t.Fatal("hardware capability did not follow platform/schema")
 	}
 	if config.Ok {
@@ -277,7 +277,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	}
 	response, err = client.Request(configSubject, configBody, 2*time.Second)
 	config = openuem.Config{}
-	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") {
+	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == 1) != (platform == "macos") {
 		t.Fatal("configured hardware capability unavailable", err)
 	}
 	if platform == "macos" {
@@ -312,7 +312,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	} else if !strings.Contains(string(sendHardware(hardware)), "denied") {
 		t.Fatal("Windows identity wrote Mac evidence")
 	}
-	recoveryPoll := testIndividualRecoveryTransport(t, model.DB, client, *issued, keys, platform)
+	recoveryPoll, rotationPoll := testIndividualRecoveryTransport(t, model.DB, client, *issued, keys, platform)
 	if err = store.RevokeIdentity(ctx, scope, issued.DeviceID, "test-admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +329,13 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		response, err := client.Request(subject, recoveryPoll, 2*time.Second)
 		if err != nil || !strings.Contains(string(response.Data), "denied") {
 			t.Fatal("revoked agent polled recovery tasks", err)
+		}
+	}
+	if rotationPoll != nil {
+		subject, _ := enrollment.RequestSubject(issued.DeviceID, "rotation")
+		response, err := client.Request(subject, rotationPoll, 2*time.Second)
+		if err != nil || !strings.Contains(string(response.Data), "denied") {
+			t.Fatal("revoked agent polled rotation tasks", err)
 		}
 	}
 	// A service with only some permitted queues must return a failure instead

@@ -102,12 +102,12 @@ func (w *Worker) PingHandler(msg *nats.Msg) {
 }
 
 func (w *Worker) AgentConfigHandler(msg *nats.Msg) {
-	w.agentConfigHandler(msg, 0, 0)
+	w.agentConfigHandler(msg, 0, 0, 0)
 }
 
 // Only the validated individual Mac path may advertise hardware collection.
-func (w *Worker) agentConfigHandler(msg *nats.Msg, hardwareVersion, recoveryVersion int) {
-	config := openuem_nats.Config{Ok: true, HardwareInventoryVersion: hardwareVersion, RecoveryTaskVersion: recoveryVersion}
+func (w *Worker) agentConfigHandler(msg *nats.Msg, hardwareVersion, recoveryVersion, rotationVersion int) {
+	config := openuem_nats.Config{Ok: true, HardwareInventoryVersion: hardwareVersion, RecoveryTaskVersion: recoveryVersion, RotationTaskVersion: rotationVersion}
 
 	remoteConfigRequest := openuem_nats.RemoteConfigRequest{}
 	err := json.Unmarshal(msg.Data, &remoteConfigRequest)

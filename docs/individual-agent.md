@@ -23,8 +23,8 @@ profile. Startup schema creation no longer drops columns or indexes owned by a
 newer component's additive migrations.
 
 The module pins the published shared implementation from
-`the-luap/openuem-nats` at `f9b56160e167` using a Go module replacement. Its
-[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34267621846), including
+`the-luap/openuem-nats` at `2d4a7c6e8561` using a Go module replacement. Its
+[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34282835187), including
 TLS/NKey reconnection and native Windows key-file ACL tests. Normal
 builds and CI do not require a sibling checkout or a local `go.work` file.
 
@@ -79,6 +79,41 @@ check its current native/agent association, permissions, current recovery key an
 the stored signed result. Integration tests exercise recipient registration,
 encrypted delivery, signed negative outcomes, duplicate acknowledgments, schema
 capability removal, Windows denial and revocation through the real TLS broker.
+
+## Private FileVault rotation
+
+Registry migration 005 adds the separate version 1 `rotation` RPC. Individual Mac
+configuration advertises `rotation_task_version: 1` only when both the rotation
+and recovery schemas are available. Legacy and Windows agents receive no rotation
+capability. Deploy the shared registry and broker permissions before this worker.
+
+Every rotation request holds current registry identity, inventory row, scope edges
+and site ownership locks through task delivery or result commit. The lock order
+matches console authorization. Concurrent inventory deletion, edge insertion or
+removal, and site reassignment cannot invalidate a checked scope before commit.
+The registry rechecks certificate lifetime after lock waits and reserves two minutes
+after the execution deadline for receipt publication. No encrypted task or successful
+acknowledgment leaves the worker before its database transaction commits.
+
+The old PRK is encrypted for the agent recipient. Any returned candidate is encrypted
+for a separate, per-attempt console key and signed by the current agent certificate.
+The worker has neither decryption key. It accepts only a receipt for a task previously
+delivered under that exact identity and recipient epoch, including an authentic late
+receipt after the execution deadline. A result and its audit entry commit together;
+an identical retry is acknowledged without duplicating the audit. Expiry maintenance
+scrubs request ciphertext and preserves uncertainty after a delivered task expires.
+It uses its own bounded context so validation maintenance cannot consume its timeout.
+
+An uncertain attempt prevents another rotation. This transport does not resolve
+uncertainty, authorize an administrator, store a native escrow key, or establish
+which candidate is current. Those are console responsibilities. The protected agent
+journal and OS lease independently prevent repeating an admitted mutation.
+
+PostgreSQL tests exercise inventory locks and authorization after a waiting scope
+change. The real TLS broker fixture covers encrypted delivery and result recovery,
+undelivered and forged result denial, absent inventory scope, atomic audit rollback,
+idempotent receipts, schema capability removal, Windows denial and revoked identities.
+These fixtures never execute FileVault commands or change device encryption.
 
 ## Private service connection
 

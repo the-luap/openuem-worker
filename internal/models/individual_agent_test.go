@@ -8,8 +8,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/open-uem/ent"
 	"github.com/open-uem/ent/task"
 	"github.com/open-uem/nats/enrollment/registry"
@@ -132,6 +134,125 @@ func TestProfileQueriesAndTaskReportsCannotCrossOrganizationOrSite(t *testing.T)
 	if err = m.AuthorizeIndividualRequest(ctx, identity, "report", 0, nil); !errors.Is(err, ErrAgentScope) {
 		t.Fatal("desktop record scope disagrees with enrollment", err)
 	}
+}
+
+func TestRotationScopeAuthorizationHoldsInventoryEdgesThroughCommit(t *testing.T) {
+	m, _ := individualTestModel(t)
+	ctx := t.Context()
+	one, err := m.Client.Tenant.Create().SetDescription("Rotation owner").Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := m.Client.Tenant.Create().SetDescription("Other owner").Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := m.Client.Site.Create().SetDescription("Rotation site").SetTenantID(one.ID).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Client.Site.Create().SetDescription("Other site").SetTenantID(two.ID).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := registry.Identity{ID: uuid.NewString(), Scope: registry.Scope{TenantID: one.ID, SiteID: first.ID}, Platform: "macos"}
+	if _, err = m.Client.Agent.Create().SetID(identity.ID).SetOs("macos").SetHostname("Rotation fixture").SetIP("192.0.2.1").SetMAC("02:00:00:00:00:01").SetWan("192.0.2.1").AddSiteIDs(first.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.AuthorizeIndividualRotation(ctx, nil, identity); !errors.Is(err, ErrAgentScope) {
+		t.Fatal("missing transaction accepted", err)
+	}
+	for _, mutation := range []struct {
+		name, query string
+		args        []any
+	}{
+		{"remove edge", `DELETE FROM site_agents WHERE agent_id=$1`, []any{identity.ID}},
+		{"add edge", `INSERT INTO site_agents(site_id,agent_id) VALUES($1,$2)`, []any{second.ID, identity.ID}},
+		{"change site owner", `UPDATE sites SET tenant_sites=$1 WHERE id=$2`, []any{two.ID, first.ID}},
+		{"delete inventory", `DELETE FROM agents WHERE oid=$1`, []any{identity.ID}},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			tx, err := m.DB.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if err = m.AuthorizeIndividualRotation(ctx, tx, identity); err != nil {
+				t.Fatal("own inventory denied", err)
+			}
+			limited, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			writer, err := m.DB.BeginTx(limited, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Rollback()
+			if _, err = writer.ExecContext(limited, `SET LOCAL statement_timeout='100ms'`); err != nil {
+				t.Fatal(err)
+			}
+			_, err = writer.ExecContext(limited, mutation.query, mutation.args...)
+			var timeout *pgconn.PgError
+			if !errors.As(err, &timeout) || timeout.Code != "57014" || limited.Err() != nil {
+				t.Fatal("scope changed before authorized transaction finished", err)
+			}
+		})
+	}
+	// A caller holding stale detached metadata must observe a scope change that
+	// commits while its inventory-edge lock is waiting.
+	writer, err := m.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	if _, err = writer.Exec(`UPDATE site_agents SET site_id=$2 WHERE agent_id=$1`, identity.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		limited, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		tx, err := m.DB.BeginTx(limited, nil)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer tx.Rollback()
+		done <- m.AuthorizeIndividualRotation(limited, tx, identity)
+	}()
+	select {
+	case err := <-done:
+		t.Fatal("scope check bypassed a pending edge change", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err = writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; !errors.Is(err, ErrAgentScope) {
+		t.Fatal("scope changed during wait but was accepted", err)
+	}
+	if _, err = m.DB.Exec(`DELETE FROM site_agents WHERE agent_id=$1`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	checkDenied := func(i registry.Identity) {
+		t.Helper()
+		tx, err := m.DB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if err = m.AuthorizeIndividualRotation(ctx, tx, i); !errors.Is(err, ErrAgentScope) {
+			t.Fatal("invalid inventory scope accepted", err)
+		}
+	}
+	checkDenied(identity)
+	if _, err = m.DB.Exec(`INSERT INTO site_agents(site_id,agent_id) VALUES($1,$3),($2,$3)`, first.ID, second.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	checkDenied(identity)
+	identity.Platform = "windows"
+	checkDenied(identity)
+	identity.Platform, identity.ID = "macos", uuid.NewString()
+	checkDenied(identity)
 }
 
 func TestWorkerStartupPreservesColumnsAndIndexesFromNewerComponents(t *testing.T) {
