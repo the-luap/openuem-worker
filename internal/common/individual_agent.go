@@ -23,6 +23,7 @@ type individualPayload struct {
 	data      []byte
 	profileID int
 	taskIDs   []int
+	hardware  *enrollment.HardwareInventory
 }
 
 func decodeIndividual(data []byte, value any) error {
@@ -54,6 +55,17 @@ func bindIndividualPayload(identity registry.Identity, operation string, data []
 	result := &individualPayload{}
 	var value any
 	switch operation {
+	case "hardware":
+		var request enrollment.HardwareInventory
+		if identity.Platform != "macos" || len(data) > 16<<10 || decodeIndividual(data, &request) != nil || request.AgentID != identity.ID {
+			return nil, errIndividualRequest
+		}
+		hardware, err := enrollment.NormalizeHardware(request)
+		if err != nil {
+			return nil, errIndividualRequest
+		}
+		result.hardware = &hardware
+		value = hardware
 	case "report":
 		var report openuem.AgentReport
 		if decodeIndividual(data, &report) != nil || report.AgentID != identity.ID || !scopeMatches(report.Tenant, report.Site) {
@@ -146,6 +158,10 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 	}
 	for _, operation := range enrollment.Operations() {
 		handler := handlers[operation]
+		if handler == nil && operation != "hardware" {
+			rollback()
+			return errIndividualRequest
+		}
 		subscription, err := w.NATSConnection.QueueSubscribe("uem.v1.agent.*.request."+operation, "openuem-individual-agents", func(message *nats.Msg) {
 			lifecycle.Lock()
 			if closed {
@@ -178,6 +194,23 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 			}
 			checked := *message
 			checked.Data = payload.data
+			if operation == "hardware" {
+				if payload.hardware == nil || access.RecordHardware(ctx, *identity, *payload.hardware) != nil {
+					deny()
+					return
+				}
+				data, _ := json.Marshal(enrollment.HardwareReceipt{Version: enrollment.HardwareInventoryVersion, OK: true})
+				_ = message.Respond(data)
+				return
+			}
+			if operation == "agentconfig" {
+				version := 0
+				if identity.Platform == "macos" && access.HardwareReady(ctx) {
+					version = enrollment.HardwareInventoryVersion
+				}
+				w.agentConfigHandler(&checked, version)
+				return
+			}
 			handler(&checked)
 		})
 		if err != nil {

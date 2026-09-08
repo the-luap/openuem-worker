@@ -102,7 +102,12 @@ func (w *Worker) PingHandler(msg *nats.Msg) {
 }
 
 func (w *Worker) AgentConfigHandler(msg *nats.Msg) {
-	config := openuem_nats.Config{}
+	w.agentConfigHandler(msg, 0)
+}
+
+// Only the validated individual Mac path may advertise hardware collection.
+func (w *Worker) agentConfigHandler(msg *nats.Msg, hardwareVersion int) {
+	config := openuem_nats.Config{Ok: true, HardwareInventoryVersion: hardwareVersion}
 
 	remoteConfigRequest := openuem_nats.RemoteConfigRequest{}
 	err := json.Unmarshal(msg.Data, &remoteConfigRequest)
@@ -116,7 +121,6 @@ func (w *Worker) AgentConfigHandler(msg *nats.Msg) {
 		config.Ok = false
 	} else {
 		config.AgentFrequency = frequency
-		config.Ok = true
 	}
 
 	wingetFrequency, err := w.Model.GetWingetFrequency(remoteConfigRequest)
@@ -125,7 +129,6 @@ func (w *Worker) AgentConfigHandler(msg *nats.Msg) {
 		config.Ok = false
 	} else {
 		config.WinGetFrequency = wingetFrequency
-		config.Ok = true
 	}
 
 	sftpStatus, err := w.Model.GetSFTPAgentSetting(remoteConfigRequest)
@@ -134,7 +137,6 @@ func (w *Worker) AgentConfigHandler(msg *nats.Msg) {
 		config.Ok = false
 	} else {
 		config.SFTPDisabled = !sftpStatus
-		config.Ok = true
 		if err := w.Model.SaveSFTPAgentSetting(remoteConfigRequest, sftpStatus); err != nil {
 			log.Printf("[ERROR]: could not save Agent SFTP status, reason: %v", err)
 		}
@@ -146,7 +148,6 @@ func (w *Worker) AgentConfigHandler(msg *nats.Msg) {
 		config.Ok = false
 	} else {
 		config.RemoteAssistanceDisabled = !remoteAssistance
-		config.Ok = true
 		if err := w.Model.SaveRemoteAssistanceAgentSetting(remoteConfigRequest, remoteAssistance); err != nil {
 			log.Printf("[ERROR]: could not save Agent Remote Assistance status, reason: %v", err)
 		}

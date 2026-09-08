@@ -17,12 +17,12 @@ import (
 var ErrAgentScope = errors.New("agent request scope is not authorized")
 
 // AuthorizeIndividualRequest checks existing desktop records and every requested
-// profile/task against the durable enrollment scope. A first inventory report or
-// configuration request can arrive before the desktop inventory row exists.
+// profile/task against the durable enrollment scope. First inventory, hardware
+// and configuration requests can arrive before the desktop inventory row exists.
 func (m *Model) AuthorizeIndividualRequest(ctx context.Context, identity registry.Identity, operation string, profileID int, taskIDs []int) error {
 	a, err := m.Client.Agent.Query().Where(agent.ID(identity.ID)).WithSite(func(q *ent.SiteQuery) { q.WithTenant() }).Only(ctx)
 	if err != nil {
-		if !ent.IsNotFound(err) || (operation != "report" && operation != "agentconfig") {
+		if !ent.IsNotFound(err) || (operation != "report" && operation != "agentconfig" && operation != "hardware") {
 			return ErrAgentScope
 		}
 	} else {

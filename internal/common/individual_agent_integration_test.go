@@ -2,9 +2,12 @@ package common
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
@@ -29,6 +32,12 @@ import (
 )
 
 func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.T) {
+	for _, platform := range []string{"windows", "macos"} {
+		t.Run(platform, func(t *testing.T) { testIndividualWorkerBoundary(t, platform) })
+	}
+}
+
+func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	dsn := os.Getenv("AGENT_ENROLLMENT_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set AGENT_ENROLLMENT_TEST_DATABASE_URL for worker/broker integration")
@@ -82,7 +91,7 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 		t.Fatal(err)
 	}
 	scope := registry.Scope{TenantID: tenant.ID, SiteID: site.ID}
-	invitation, err := store.Invite(ctx, registry.InvitationOptions{Scope: scope, Platform: "windows", Architecture: "amd64", MaxUses: 1, ExpiresAt: time.Now().Add(time.Hour)}, "test-admin")
+	invitation, err := store.Invite(ctx, registry.InvitationOptions{Scope: scope, Platform: platform, Architecture: "amd64", MaxUses: 1, ExpiresAt: time.Now().Add(time.Hour)}, "test-admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +99,7 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := keys.Request(invitation.URL[strings.LastIndex(invitation.URL, "/")+1:], "windows", "amd64", "Endpoint")
+	request, err := keys.Request(invitation.URL[strings.LastIndex(invitation.URL, "/")+1:], platform, "amd64", "Endpoint")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +107,7 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = model.Client.Agent.Create().SetID(issued.DeviceID).SetOs("windows").SetHostname("Endpoint").SetIP("192.0.2.1").SetMAC("02:00:00:00:00:01").SetWan("192.0.2.1").AddSiteIDs(site.ID).Save(ctx); err != nil {
+	if _, err = model.Client.Agent.Create().SetID(issued.DeviceID).SetOs(platform).SetHostname("Endpoint").SetIP("192.0.2.1").SetMAC("02:00:00:00:00:01").SetWan("192.0.2.1").AddSiteIDs(site.ID).Save(ctx); err != nil {
 		t.Fatal(err)
 	}
 	public, _ := keys.Broker.PublicKey()
@@ -239,6 +248,70 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 	if response := requestResult(issued.DeviceID, "own-package"); len(response) != 0 || count() != 1 {
 		t.Fatal("valid scoped message did not reach real handler")
 	}
+	hardwareSubject, _ := enrollment.RequestSubject(issued.DeviceID, "hardware")
+	hardware := enrollment.HardwareInventory{Version: 1, AgentID: issued.DeviceID, Model: "iMacPro1,1", Serial: "ABCD123456", PlatformUUID: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", Binding: &enrollment.MacBindingProof{ChallengeID: uuid.NewString(), DeviceID: uuid.NewString(), Token: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))}}
+	sendHardware := func(h enrollment.HardwareInventory) []byte {
+		t.Helper()
+		data, _ := json.Marshal(h)
+		response, err := client.Request(hardwareSubject, data, 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response.Data
+	}
+	configSubject, _ := enrollment.RequestSubject(issued.DeviceID, "agentconfig")
+	configBody, _ := json.Marshal(openuem.RemoteConfigRequest{AgentID: issued.DeviceID})
+	response, err := client.Request(configSubject, configBody, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config openuem.Config
+	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") {
+		t.Fatal("hardware capability did not follow platform/schema")
+	}
+	if config.Ok {
+		t.Fatal("missing frequency settings reported successful configuration")
+	}
+	if _, err := model.Client.Settings.Create().SetTenantID(tenant.ID).SetAgentReportFrequenceInMinutes(15).SetProfilesApplicationFrequenceInMinutes(30).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	response, err = client.Request(configSubject, configBody, 2*time.Second)
+	config = openuem.Config{}
+	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") {
+		t.Fatal("configured hardware capability unavailable", err)
+	}
+	if platform == "macos" {
+		var receipt enrollment.HardwareReceipt
+		if json.Unmarshal(sendHardware(hardware), &receipt) != nil || !receipt.OK || receipt.Version != 1 {
+			t.Fatal("Mac evidence was not acknowledged")
+		}
+		var stored string
+		digest := sha256.Sum256([]byte(hardware.Binding.Token))
+		if err := model.DB.QueryRow(`SELECT binding_token_hash FROM uem_agent_hardware WHERE device_id=$1 AND tenant_id=$2 AND site_id=$3`, issued.DeviceID, scope.TenantID, scope.SiteID).Scan(&stored); err != nil || stored != hex.EncodeToString(digest[:]) {
+			t.Fatal("proof not committed under authorized scope", err)
+		}
+		foreignHardware := hardware
+		foreignHardware.AgentID = foreign
+		if !strings.Contains(string(sendHardware(foreignHardware)), "denied") {
+			t.Fatal("foreign hardware identity accepted")
+		}
+		if _, err := model.DB.Exec(`ALTER TABLE uem_agent_hardware RENAME TO isolated_unavailable_hardware`); err != nil {
+			t.Fatal(err)
+		}
+		response, err = client.Request(configSubject, configBody, 2*time.Second)
+		config = openuem.Config{}
+		if err != nil || json.Unmarshal(response.Data, &config) != nil || config.HardwareInventoryVersion != 0 {
+			t.Fatal("missing hardware schema advertised", err)
+		}
+		if !strings.Contains(string(sendHardware(hardware)), "denied") {
+			t.Fatal("missing schema returned hardware success")
+		}
+		if _, err := model.DB.Exec(`ALTER TABLE isolated_unavailable_hardware RENAME TO uem_agent_hardware`); err != nil {
+			t.Fatal(err)
+		}
+	} else if !strings.Contains(string(sendHardware(hardware)), "denied") {
+		t.Fatal("Windows identity wrote Mac evidence")
+	}
 	if err = store.RevokeIdentity(ctx, scope, issued.DeviceID, "test-admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -246,6 +319,9 @@ func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.
 	// every new request must observe persisted revocation.
 	if response := requestResult(issued.DeviceID, "after-revocation"); !strings.Contains(string(response), "denied") || count() != 1 {
 		t.Fatal("revoked sender reached mutation")
+	}
+	if !strings.Contains(string(sendHardware(hardware)), "denied") {
+		t.Fatal("revoked sender refreshed hardware evidence")
 	}
 	// A service with only some permitted queues must return a failure instead
 	// of remaining alive with an incomplete set of subscriptions.

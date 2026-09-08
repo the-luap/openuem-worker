@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	openuem "github.com/open-uem/nats"
+	"github.com/open-uem/nats/enrollment"
 	"github.com/open-uem/nats/enrollment/registry"
 )
 
@@ -66,6 +67,38 @@ func TestIndividualPayloadBindsIdentityAndRejectsScopeEscalation(t *testing.T) {
 	payload, err := bindIndividualPayload(identity, "report", []byte(`{"ID":"`+foreign+`","id":"`+id+`"}`))
 	if err != nil || strings.Contains(string(payload.data), foreign) {
 		t.Fatal("conflicting alias survived canonicalization", err)
+	}
+}
+
+func TestIndividualHardwarePayloadBindsMacIdentityAndRejectsMalformedProof(t *testing.T) {
+	identity := registry.Identity{ID: "12345678-1234-4234-8234-123456789abc", Scope: registry.Scope{TenantID: 1, SiteID: 10}, Platform: "macos"}
+	h := enrollment.HardwareInventory{Version: 1, AgentID: identity.ID, Model: "Mac16,1", Serial: "abcd123456", PlatformUUID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+	data, _ := json.Marshal(h)
+	payload, err := bindIndividualPayload(identity, "hardware", data)
+	if err != nil || payload.hardware == nil || payload.hardware.Serial != "ABCD123456" {
+		t.Fatal("Mac evidence lost normalization", err)
+	}
+	for _, mutate := range []func(*enrollment.HardwareInventory){
+		func(h *enrollment.HardwareInventory) { h.AgentID = "12345678-1234-4234-8234-123456789abd" },
+		func(h *enrollment.HardwareInventory) { h.Version = 2 },
+		func(h *enrollment.HardwareInventory) { h.PlatformUUID = "" },
+		func(h *enrollment.HardwareInventory) { h.Binding = &enrollment.MacBindingProof{} },
+	} {
+		copy := h
+		mutate(&copy)
+		data, _ := json.Marshal(copy)
+		if _, err := bindIndividualPayload(identity, "hardware", data); err == nil {
+			t.Fatal("invalid hardware accepted")
+		}
+	}
+	data = append(data[:len(data)-1], []byte(`,"tenant_id":2}`)...)
+	if _, err := bindIndividualPayload(identity, "hardware", data); err == nil {
+		t.Fatal("hardware added unrecognized scope")
+	}
+	identity.Platform = "windows"
+	data, _ = json.Marshal(h)
+	if _, err := bindIndividualPayload(identity, "hardware", data); err == nil {
+		t.Fatal("Windows evidence accepted as Mac")
 	}
 }
 

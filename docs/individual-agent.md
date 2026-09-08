@@ -23,10 +23,36 @@ profile. Startup schema creation no longer drops columns or indexes owned by a
 newer component's additive migrations.
 
 The module pins the published shared implementation from
-`the-luap/openuem-nats` at `6940f11772a9` using a Go module replacement. Its
-[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34172052566), including
+`the-luap/openuem-nats` at `4e6e26103fd9` using a Go module replacement. Its
+[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34246345384), including
 TLS/NKey reconnection and native Windows key-file ACL tests. Normal
 builds and CI do not require a sibling checkout or a local `go.work` file.
+
+## Mac hardware evidence
+
+The individual worker accepts the separate version 1 `hardware` operation only
+for active Mac identities. The body is limited to 16 KiB, has a matching device
+ID, and contains normalized model, serial, platform UUID, optional provisioning
+UDID and optional MDM binding proof. The ordinary inventory report is unchanged.
+The registry commits evidence under the current organization/site and locks the
+identity against concurrent revocation. It stores a hash of the binding token,
+never its plaintext. The successful receipt is sent only after commit; unavailable
+schema, invalid data and denied identities receive a generic denial.
+
+The individual Mac configuration advertises `hardware_inventory_version: 1`
+only when registry migration 003 is available. Legacy configuration and Windows
+identities never advertise it. Configuration errors remain errors even when a
+later setting lookup succeeds. Upgrade the registry/console and broker authorization
+service before the worker, then reconnect agents to refresh broker permissions.
+Update agents last. Broker service permissions must include the new operation.
+An existing desktop record must agree with enrollment scope; first observations
+may precede the ordinary inventory row. Neither a serial match nor this evidence
+table creates an MDM association or grants additional administration rights.
+
+The real-broker test covers both Windows and Mac enrollments, persisted proof
+hashes, the capability disappearing when its schema is unavailable, foreign body
+IDs and requests on a still-open connection after revocation. Native Mac linking
+and proof lifecycle are implemented separately in the console.
 
 ## Private service connection
 
