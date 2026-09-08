@@ -266,7 +266,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		t.Fatal(err)
 	}
 	var config openuem.Config
-	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") {
+	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") {
 		t.Fatal("hardware capability did not follow platform/schema")
 	}
 	if config.Ok {
@@ -312,6 +312,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	} else if !strings.Contains(string(sendHardware(hardware)), "denied") {
 		t.Fatal("Windows identity wrote Mac evidence")
 	}
+	recoveryPoll := testIndividualRecoveryTransport(t, model.DB, client, *issued, keys, platform)
 	if err = store.RevokeIdentity(ctx, scope, issued.DeviceID, "test-admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +323,13 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	}
 	if !strings.Contains(string(sendHardware(hardware)), "denied") {
 		t.Fatal("revoked sender refreshed hardware evidence")
+	}
+	if recoveryPoll != nil {
+		subject, _ := enrollment.RequestSubject(issued.DeviceID, "recovery")
+		response, err := client.Request(subject, recoveryPoll, 2*time.Second)
+		if err != nil || !strings.Contains(string(response.Data), "denied") {
+			t.Fatal("revoked agent polled recovery tasks", err)
+		}
 	}
 	// A service with only some permitted queues must return a failure instead
 	// of remaining alive with an incomplete set of subscriptions.

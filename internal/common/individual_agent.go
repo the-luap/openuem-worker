@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ type individualPayload struct {
 	profileID int
 	taskIDs   []int
 	hardware  *enrollment.HardwareInventory
+	recovery  *enrollment.RecoveryRequest
 }
 
 func decodeIndividual(data []byte, value any) error {
@@ -55,6 +57,13 @@ func bindIndividualPayload(identity registry.Identity, operation string, data []
 	result := &individualPayload{}
 	var value any
 	switch operation {
+	case "recovery":
+		request, err := enrollment.DecodeRecoveryRequest(data, time.Now())
+		if err != nil || identity.Platform != "macos" || request.AgentID != identity.ID {
+			return nil, errIndividualRequest
+		}
+		result.recovery = request
+		value = request
 	case "hardware":
 		var request enrollment.HardwareInventory
 		if identity.Platform != "macos" || len(data) > 16<<10 || decodeIndividual(data, &request) != nil || request.AgentID != identity.ID {
@@ -158,7 +167,7 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 	}
 	for _, operation := range enrollment.Operations() {
 		handler := handlers[operation]
-		if handler == nil && operation != "hardware" {
+		if handler == nil && operation != "hardware" && operation != "recovery" {
 			rollback()
 			return errIndividualRequest
 		}
@@ -194,6 +203,24 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 			}
 			checked := *message
 			checked.Data = payload.data
+			if operation == "recovery" {
+				if payload.recovery == nil {
+					deny()
+					return
+				}
+				reply, err := access.HandleRecovery(ctx, *identity, *payload.recovery)
+				if err != nil {
+					deny()
+					return
+				}
+				data, err := json.Marshal(reply)
+				if err != nil {
+					deny()
+					return
+				}
+				_ = message.Respond(data)
+				return
+			}
 			if operation == "hardware" {
 				if payload.hardware == nil || access.RecordHardware(ctx, *identity, *payload.hardware) != nil {
 					deny()
@@ -205,10 +232,14 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 			}
 			if operation == "agentconfig" {
 				version := 0
+				recoveryVersion := 0
 				if identity.Platform == "macos" && access.HardwareReady(ctx) {
 					version = enrollment.HardwareInventoryVersion
 				}
-				w.agentConfigHandler(&checked, version)
+				if identity.Platform == "macos" && access.RecoveryReady(ctx) {
+					recoveryVersion = enrollment.RecoveryVersion
+				}
+				w.agentConfigHandler(&checked, version, recoveryVersion)
 				return
 			}
 			handler(&checked)
@@ -232,5 +263,23 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 		return errIndividualRequest
 	}
 	w.stopIndividualRequests = rollback
+	requests.Add(1)
+	go func() {
+		defer requests.Done()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			ctx, cancel := context.WithTimeout(requestContext, 5*time.Second)
+			if access.RecoveryReady(ctx) && access.ExpireRecoveryTasks(ctx) != nil && requestContext.Err() == nil {
+				log.Print("[ERROR]: private recovery task maintenance failed")
+			}
+			cancel()
+			select {
+			case <-requestContext.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	return nil
 }

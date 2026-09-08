@@ -23,8 +23,8 @@ profile. Startup schema creation no longer drops columns or indexes owned by a
 newer component's additive migrations.
 
 The module pins the published shared implementation from
-`the-luap/openuem-nats` at `249bb9d5e690` using a Go module replacement. Its
-[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34246345384), including
+`the-luap/openuem-nats` at `f9b56160e167` using a Go module replacement. Its
+[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34267621846), including
 TLS/NKey reconnection and native Windows key-file ACL tests. Normal
 builds and CI do not require a sibling checkout or a local `go.work` file.
 
@@ -53,6 +53,32 @@ The real-broker test covers both Windows and Mac enrollments, persisted proof
 hashes, the capability disappearing when its schema is unavailable, foreign body
 IDs and requests on a still-open connection after revocation. Native Mac linking
 and proof lifecycle are implemented separately in the console.
+
+## Private FileVault validation
+
+Registry migration 004 adds the individual Mac `recovery` RPC. A successful Mac
+configuration advertises `recovery_task_version: 1` only while all recovery tables
+are available. Broker permissions must include this operation before the worker
+starts. Missing subscriptions fail startup. Durable command filters are unchanged.
+
+The worker binds canonical requests of at most 8 KiB to the authenticated subject,
+current Mac identity and existing desktop inventory scope. The registry rechecks
+the signing certificate and organization/site under transaction locks. Recipient
+registration requires a signed server challenge. A task is encrypted for a separate
+agent X25519 key; this path does not need the console's encryption master key.
+
+Results authenticate the task, native Mac, recovery-key version, recipient epoch,
+expiry, random nonce and exact outcome with the agent's RSA signature. Exact
+duplicate acknowledgments are idempotent. Committing a result also commits its
+audit record and erases the pending ciphertext. Revocation or recipient replacement
+cancels older pending tasks. Every 30 seconds the worker erases up to 256 expired
+or invalid envelopes, including offline agents, without waiting on active tasks.
+
+The worker does not mark a FileVault key verified. The console must independently
+check its current native/agent association, permissions, current recovery key and
+the stored signed result. Integration tests exercise recipient registration,
+encrypted delivery, signed negative outcomes, duplicate acknowledgments, schema
+capability removal, Windows denial and revocation through the real TLS broker.
 
 ## Private service connection
 
