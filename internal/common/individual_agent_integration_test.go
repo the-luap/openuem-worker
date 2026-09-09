@@ -266,7 +266,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		t.Fatal(err)
 	}
 	var config openuem.Config
-	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == 1) != (platform == "macos") {
+	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") {
 		t.Fatal("hardware capability did not follow platform/schema")
 	}
 	if config.Ok {
@@ -277,7 +277,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	}
 	response, err = client.Request(configSubject, configBody, 2*time.Second)
 	config = openuem.Config{}
-	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == 1) != (platform == "macos") {
+	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") {
 		t.Fatal("configured hardware capability unavailable", err)
 	}
 	if platform == "macos" {

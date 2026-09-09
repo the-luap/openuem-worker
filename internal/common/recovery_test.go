@@ -70,7 +70,7 @@ func testIndividualRecoveryTransport(t *testing.T, db *sql.DB, client *nats.Conn
 			t.Fatal("Windows agent obtained Mac recipient challenge")
 		}
 		rotationSubject, _ := enrollment.RequestSubject(issued.DeviceID, "rotation")
-		poll, _ := json.Marshal(enrollment.RotationRequest{Version: 1, Protocol: enrollment.RotationProtocol, AgentID: issued.DeviceID, Action: "poll", RecipientID: uuid.NewString()})
+		poll, _ := json.Marshal(enrollment.RotationRequest{Version: enrollment.RotationVersion, Protocol: enrollment.RotationProtocol, AgentID: issued.DeviceID, Action: "poll", RecipientID: uuid.NewString()})
 		response, err := client.Request(rotationSubject, poll, 2*time.Second)
 		if err != nil || !strings.Contains(string(response.Data), "denied") {
 			t.Fatal("Windows agent reached FileVault rotation", err)

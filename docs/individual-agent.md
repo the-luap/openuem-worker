@@ -82,8 +82,8 @@ capability removal, Windows denial and revocation through the real TLS broker.
 
 ## Private FileVault rotation
 
-Registry migration 005 adds the separate version 1 `rotation` RPC. Individual Mac
-configuration advertises `rotation_task_version: 1` only when both the rotation
+Registry migration 005 adds the separate `rotation` RPC, now negotiated as version 2.
+Individual Mac configuration advertises `rotation_task_version: 2` only when both the rotation
 and recovery schemas are available. Legacy and Windows agents receive no rotation
 capability. Deploy the shared registry and broker permissions before this worker.
 
@@ -107,7 +107,11 @@ It uses its own bounded context so validation maintenance cannot consume its tim
 An uncertain attempt prevents another rotation. This transport does not resolve
 uncertainty, authorize an administrator, store a native escrow key, or establish
 which candidate is current. Those are console responsibilities. The protected agent
-journal and OS lease independently prevent repeating an admitted mutation.
+journal prevents repeating an admitted mutation. A freed parent lease does not
+prove that a launched child stopped. Version 2 requires explicit signed
+`execution_stopped` evidence before the registry admits an old-key check for
+resolution. Old workers and agents cannot negotiate this capability. Immutable
+legacy uncertainty receipts remain retained but cannot authorize resolution.
 
 PostgreSQL tests exercise inventory locks and authorization after a waiting scope
 change. The real TLS broker fixture covers encrypted delivery and result recovery,

@@ -20,15 +20,16 @@ import (
 
 func TestIndividualRotationRejectsForeignAndAmbiguousRequests(t *testing.T) {
 	i := registry.Identity{ID: uuid.NewString(), Scope: registry.Scope{TenantID: 1, SiteID: 2}, Platform: "macos"}
-	r := enrollment.RotationRequest{Version: 1, Protocol: enrollment.RotationProtocol, AgentID: i.ID, Action: "poll", RecipientID: uuid.NewString()}
+	r := enrollment.RotationRequest{Version: enrollment.RotationVersion, Protocol: enrollment.RotationProtocol, AgentID: i.ID, Action: "poll", RecipientID: uuid.NewString()}
 	data, _ := json.Marshal(r)
 	if payload, err := bindIndividualPayload(i, "rotation", data); err != nil || payload.rotation == nil {
 		t.Fatal("valid rotation poll denied", err)
 	}
 	for _, bad := range [][]byte{
+		bytes.Replace(data, []byte(`"version":2`), []byte(`"version":1`), 1),
 		append(bytes.Clone(data), ' '), bytes.Replace(data, []byte(i.ID), []byte(uuid.NewString()), 1),
-		bytes.Replace(data, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1),
-		bytes.Replace(data, []byte(`"version":1`), []byte(`"version":1,"tenant_id":2`), 1),
+		bytes.Replace(data, []byte(`"version":2`), []byte(`"version":2,"version":2`), 1),
+		bytes.Replace(data, []byte(`"version":2`), []byte(`"version":2,"tenant_id":2`), 1),
 		bytes.Replace(data, []byte(enrollment.RotationProtocol), []byte("validation"), 1),
 		bytes.Repeat([]byte("x"), enrollment.MaxRecoveryMessage+1),
 	} {
@@ -50,7 +51,7 @@ func testIndividualRotationTransport(t *testing.T, db *sql.DB, client *nats.Conn
 	subject, _ := enrollment.RequestSubject(issued.DeviceID, "rotation")
 	exchange := func(request enrollment.RotationRequest) []byte {
 		t.Helper()
-		request.Version, request.Protocol, request.AgentID = 1, enrollment.RotationProtocol, issued.DeviceID
+		request.Version, request.Protocol, request.AgentID = enrollment.RotationVersion, enrollment.RotationProtocol, issued.DeviceID
 		wire, _ := json.Marshal(request)
 		response, err := client.Request(subject, wire, 2*time.Second)
 		if err != nil {
@@ -58,7 +59,7 @@ func testIndividualRotationTransport(t *testing.T, db *sql.DB, client *nats.Conn
 		}
 		return response.Data
 	}
-	poll := enrollment.RotationRequest{Version: 1, Protocol: enrollment.RotationProtocol, AgentID: issued.DeviceID, Action: "poll", RecipientID: recipient.ID}
+	poll := enrollment.RotationRequest{Version: enrollment.RotationVersion, Protocol: enrollment.RotationProtocol, AgentID: issued.DeviceID, Action: "poll", RecipientID: recipient.ID}
 	access, err := registry.NewAccessStore(db)
 	if err != nil {
 		t.Fatal(err)
