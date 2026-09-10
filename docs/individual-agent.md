@@ -120,6 +120,9 @@ These fixtures never execute FileVault commands or change device encryption.
 
 ## Private service connection
 
+The [dedicated container image](individual-container.md) runs the same individual
+worker command without a shell, legacy PID-file healthcheck or bundled credentials.
+
 Both `openuem-worker agents start` and the installed Linux/Windows agent-worker
 services recognize individual mode before reading legacy certificate/INI settings.
 Set these variables in the protected service environment:

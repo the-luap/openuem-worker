@@ -1,0 +1,9 @@
+**
+!go.mod
+!go.sum
+!main.go
+!LICENSE
+!internal/
+!internal/**/
+!internal/**/*.go
+internal/**/*_test.go

@@ -35,8 +35,22 @@ jobs:
         run: go test -race -count=1 ./internal/common ./internal/models ./internal/commands
       - name: Actual worker command with protected database and encryption files
         run: |
-          CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/openuem-worker" .
+          set -euo pipefail
+          docker build -f Dockerfile.individual -t individual-worker:check .
+          python3 scripts/check-individual-image.py individual-worker:check
+          container=$(docker create individual-worker:check --help)
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          docker cp "$container:/openuem-worker" "$RUNNER_TEMP/openuem-worker"
           OPENUEM_WORKER_TEST_BINARY="$RUNNER_TEMP/openuem-worker" go test -count=1 -run '^TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders$' ./internal/common
+  arm-container:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native arm64 distribution image
+        run: |
+          docker build -f Dockerfile.individual -t individual-worker:check .
+          python3 scripts/check-individual-image.py individual-worker:check
   windows-credentials:
     runs-on: windows-latest
     timeout-minutes: 15
