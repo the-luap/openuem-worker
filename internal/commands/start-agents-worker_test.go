@@ -11,6 +11,7 @@ import (
 func TestAgentCLIReachesIndividualConfigurationWithoutLegacyFlags(t *testing.T) {
 	t.Setenv("OPENUEM_INDIVIDUAL_AGENT_MODE", "true")
 	t.Setenv("OPENUEM_AGENT_DATABASE_URL", "")
+	t.Setenv("OPENUEM_AGENT_DATABASE_URL_FILE", "")
 	t.Setenv("OPENUEM_AGENT_BROKER_URLS", "")
 	t.Setenv("OPENUEM_AGENT_WORKER_KEY_FILE", "")
 	t.Setenv("DATABASE_URL", "")

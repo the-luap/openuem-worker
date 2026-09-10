@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	openuem "github.com/open-uem/nats"
+	"github.com/open-uem/nats/enrollment/servicecredentials"
 	"github.com/open-uem/openuem-worker/internal/models"
 )
 
@@ -28,14 +29,22 @@ func (w *Worker) ConfigureIndividualAgentService() (bool, error) {
 		CertificateFile: os.Getenv("OPENUEM_AGENT_BROKER_CLIENT_CERT_FILE"), TLSKeyFile: os.Getenv("OPENUEM_AGENT_BROKER_CLIENT_KEY_FILE"),
 		Event: func(state string) { log.Printf("[INFO]: individual agent worker broker %s", state) },
 	}
-	dbURL := os.Getenv("OPENUEM_AGENT_DATABASE_URL")
-	if dbURL == "" || !openuem.ValidServiceURLs(config.Servers) || config.KeyFile == "" {
+	rawDatabase, databaseFile := os.Getenv("OPENUEM_AGENT_DATABASE_URL"), os.Getenv("OPENUEM_AGENT_DATABASE_URL_FILE")
+	if rawDatabase == "" && databaseFile == "" || !openuem.ValidServiceURLs(config.Servers) || config.KeyFile == "" {
 		return false, errors.New("individual agent worker requires a database URL, explicit TLS broker URLs and a protected service key file")
+	}
+	dbURL, err := servicecredentials.DatabaseURL(rawDatabase, databaseFile)
+	if err != nil {
+		return false, err
+	}
+	master, err := servicecredentials.EncryptionKey(os.Getenv("ENCRYPTION_MASTER_KEY"), os.Getenv("ENCRYPTION_MASTER_KEY_FILE"))
+	if err != nil {
+		return false, err
 	}
 	w.DBUrl = dbURL
 	w.NATSServers = config.Servers
 	w.IndividualAgentService = config
-	w.EncryptionMasterKey = os.Getenv("ENCRYPTION_MASTER_KEY")
+	w.EncryptionMasterKey = master
 	return true, nil
 }
 

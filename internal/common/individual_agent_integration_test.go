@@ -27,6 +27,7 @@ import (
 	"github.com/open-uem/ent/wingetconfigexclusion"
 	openuem "github.com/open-uem/nats"
 	"github.com/open-uem/nats/enrollment"
+	"github.com/open-uem/nats/enrollment/keyfile"
 	"github.com/open-uem/nats/enrollment/registry"
 	"github.com/open-uem/openuem-worker/internal/models"
 )
@@ -161,7 +162,15 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		t.Fatal(err)
 	}
 	defer workerConnection.Close()
-	t.Setenv("OPENUEM_AGENT_DATABASE_URL", u.String())
+	databaseFile := filepath.Join(t.TempDir(), "database.url")
+	masterFile := filepath.Join(t.TempDir(), "encryption.key")
+	if keyfile.Create(databaseFile, []byte(u.String())) != nil || keyfile.Create(masterFile, []byte(strings.Repeat("m", 32))) != nil {
+		t.Fatal("cannot create protected worker inputs")
+	}
+	t.Setenv("OPENUEM_AGENT_DATABASE_URL", "")
+	t.Setenv("OPENUEM_AGENT_DATABASE_URL_FILE", databaseFile)
+	t.Setenv("ENCRYPTION_MASTER_KEY", "")
+	t.Setenv("ENCRYPTION_MASTER_KEY_FILE", masterFile)
 	t.Setenv("OPENUEM_AGENT_BROKER_URLS", broker.ClientURL())
 	t.Setenv("OPENUEM_AGENT_WORKER_KEY_FILE", writeSeed(workerKey))
 	t.Setenv("OPENUEM_AGENT_BROKER_CA_FILE", caPath)
@@ -173,7 +182,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	}
 	workerContext, stopWorker := context.WithCancel(ctx)
 	workerResult := make(chan error, 1)
-	go func() { workerResult <- worker.RunIndividualAgentWorker(workerContext) }()
+	go func() { workerResult <- runIndividualWorkerFixture(workerContext, worker) }()
 	t.Cleanup(func() {
 		stopWorker()
 		select {

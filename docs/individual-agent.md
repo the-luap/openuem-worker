@@ -23,9 +23,8 @@ profile. Startup schema creation no longer drops columns or indexes owned by a
 newer component's additive migrations.
 
 The module pins the published shared implementation from
-`the-luap/openuem-nats` at `2d4a7c6e8561` using a Go module replacement. Its
-[CI passed](https://github.com/the-luap/openuem-nats/actions/runs/34282835187), including
-TLS/NKey reconnection and native Windows key-file ACL tests. Normal
+`the-luap/openuem-nats` at `87aa1bdf56ea` using a Go module replacement, including
+the shared protected database/encryption input reader. Normal
 builds and CI do not require a sibling checkout or a local `go.work` file.
 
 ## Mac hardware evidence
@@ -128,15 +127,27 @@ Set these variables in the protected service environment:
 | Variable | Purpose |
 | --- | --- |
 | `OPENUEM_INDIVIDUAL_AGENT_MODE=true` | Enable the individual runtime and versioned queues |
-| `OPENUEM_AGENT_DATABASE_URL` | PostgreSQL URL for the existing console database and initialized enrollment registry |
+| `OPENUEM_AGENT_DATABASE_URL_FILE` | Protected PostgreSQL URL file for the existing console database and initialized enrollment registry |
+| `OPENUEM_AGENT_DATABASE_URL` | Existing raw database source; mutually exclusive with the file source |
 | `OPENUEM_AGENT_BROKER_URLS` | Explicit comma-separated private `tls://` broker origins |
 | `OPENUEM_AGENT_WORKER_KEY_FILE` | Protected NKey user seed assigned to the trusted agent worker |
 | `OPENUEM_AGENT_BROKER_CA_FILE` | Optional private broker CA bundle; otherwise system roots |
 | `OPENUEM_AGENT_BROKER_CLIENT_CERT_FILE` | Optional TLS client certificate if the private broker requires mutual TLS |
 | `OPENUEM_AGENT_BROKER_CLIENT_KEY_FILE` | Matching protected TLS private key |
-| `ENCRYPTION_MASTER_KEY` | Existing encrypted task-field key, when those tasks are used |
+| `ENCRYPTION_MASTER_KEY_FILE` | Protected file containing the actual 32-byte encrypted task-field key, when those tasks are used |
+| `ENCRYPTION_MASTER_KEY` | Existing raw 32-byte key; mutually exclusive with the file source |
 
 Private files must pass the library's Unix ownership/mode or Windows ACL checks.
+Database URL files contain at most 8192 printable non-space ASCII bytes and must
+specify a network PostgreSQL host and database. Key files contain exactly 32
+printable non-space ASCII bytes; no hex/base64 decoding occurs. Both accept a
+single LF/CRLF terminator. Final symlinks, missing files, malformed inputs and
+competing raw/file sources are rejected without echoing values or falling back
+to legacy settings. Read-only mounts are sufficient. Keep ancestor directories
+trusted. Use `sslmode=verify-full` and the intended CA in the deployment URL.
+An omitted encryption key remains optional only for workers that do not process
+encrypted tasks; a selected raw or file key must have the correct length.
+
 The connection always verifies TLS and authenticates the service NKey; it cannot
 discover a different broker, use cleartext, or fall back to shared certificates.
 The worker requires registry initialization. Missing configuration, invalid files,
@@ -169,6 +180,13 @@ exclusion handler. Partial subscription permissions stop the runtime, and CLI
 tests verify startup no longer requires legacy connection flags. Forged reply
 addresses, foreign body IDs and a revoked sender
 cannot mutate inventory. Linux and Windows cross-builds are also required.
+
+The real-broker fixture now supplies its database URL and task-field key through
+protected files. With `OPENUEM_WORKER_TEST_BINARY` set to the compiled executable,
+it runs `agents start` as a separate process with only the required service
+environment, exercises the same requests and sends SIGTERM during cleanup. CI
+requires that process fixture as well as the in-process race tests. Native Windows
+CI covers protected input selection and rejected legacy configuration fallback.
 
 This change implements the worker boundary and service runtime. The production
 broker account configuration, console issuance UI, signed bootstrap/installers,
