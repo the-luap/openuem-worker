@@ -25,8 +25,13 @@ reservation; unknown, unavailable and same-boot observations leave it reserved.
 The observation receipt, audit and any release commit together before reply.
 
 The worker does not receive the enrollment CA signing key or construct executable
-plans. Explicit console dispatch and the native agent executor remain separate
-integration work. This RPC does not automatically promote console preparations.
+plans. The [console](https://github.com/the-luap/openuem-console/blob/3834fa9331f4a118504563126bb06937e1e798d9/docs/windows-software-requests.md)
+now provides separately confirmed dispatch and read-only reconciliation, with
+verified original-scope history and queued cancellation. The
+[Windows service](https://github.com/the-luap/openuem-agent/blob/4157fb6583725d0e0fd20f03c94183dcc9e6c9c4/docs/windows-software-reconciliation.md)
+joins native execution and read-only checks with protected receipt recovery.
+This RPC does not automatically promote console preparations or queue another
+installer after a definite reconciliation releases its original reservation.
 
 Tests use the real worker, isolated PostgreSQL and authenticated WSS: admission,
 registration, encrypted delivery, absent/disabled inventory denial, failed audit
