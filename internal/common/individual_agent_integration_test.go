@@ -289,7 +289,10 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareReconciliationVersion == enrollment.SoftwareReconciliationVersion) != (platform == "windows") {
 		t.Fatal("configured hardware capability unavailable", err)
 	}
-	legacyConfig, err := workerConnection.Subscribe("owned.legacy.agentconfig", worker.AgentConfigHandler)
+	// The production-command fixture owns its Model in a separate process.
+	// This isolated legacy subscription needs its own initialized test model.
+	legacyWorker := &Worker{Model: model}
+	legacyConfig, err := workerConnection.Subscribe("owned.legacy.agentconfig", legacyWorker.AgentConfigHandler)
 	if err != nil {
 		t.Fatal(err)
 	}
