@@ -102,13 +102,13 @@ func (w *Worker) PingHandler(msg *nats.Msg) {
 }
 
 func (w *Worker) AgentConfigHandler(msg *nats.Msg) {
-	w.agentConfigHandler(msg, 0, 0, 0, 0, 0)
+	w.agentConfigHandler(msg, 0, 0, 0, 0, 0, 0)
 }
 
 // Private protocol capabilities are advertised only by the validated individual
 // platform path after its corresponding registry schema is ready.
-func (w *Worker) agentConfigHandler(msg *nats.Msg, hardwareVersion, recoveryVersion, rotationVersion, softwareVersion, softwareReconciliationVersion int) {
-	config := openuem_nats.Config{Ok: true, HardwareInventoryVersion: hardwareVersion, RecoveryTaskVersion: recoveryVersion, RotationTaskVersion: rotationVersion, SoftwareTaskVersion: softwareVersion, SoftwareReconciliationVersion: softwareReconciliationVersion}
+func (w *Worker) agentConfigHandler(msg *nats.Msg, hardwareVersion, recoveryVersion, rotationVersion, softwareVersion, softwareReconciliationVersion, softwareBurnVersion int) {
+	config := openuem_nats.Config{Ok: true, HardwareInventoryVersion: hardwareVersion, RecoveryTaskVersion: recoveryVersion, RotationTaskVersion: rotationVersion, SoftwareTaskVersion: softwareVersion, SoftwareBurnVersion: softwareBurnVersion, SoftwareReconciliationVersion: softwareReconciliationVersion}
 
 	remoteConfigRequest := openuem_nats.RemoteConfigRequest{}
 	err := json.Unmarshal(msg.Data, &remoteConfigRequest)

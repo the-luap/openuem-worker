@@ -13,9 +13,14 @@ devices can still submit signed results for previously delivered work in their
 unchanged authorized scope. Every result requires an additional proof from the
 current certificate; an old broker connection is insufficient after renewal.
 
-The worker advertises `software_task_version` and the independent
-`software_reconciliation_version` only for Windows with the complete registry
-schema, including migration 013. Legacy configuration advertises zero for both.
+The worker advertises `software_task_version`, the independent
+`software_reconciliation_version`, and `software_burn_version` only for private
+Windows profiles with the complete registry schema, including migrations 013 and
+014. Both recipient and challenge capability columns must exist. Legacy
+configuration advertises zero for all three. The Burn profile hint permits the
+agent to request the exact capability; only the device-signed recipient
+registration grants dispatch support. Upgrades and downgrades require a new
+matching challenge and signature.
 A joined maintenance loop
 expires undelivered work and retains delivered timeout as uncertainty. Uncertain
 and restart-required tasks remain reserved, with immutable original evidence.
@@ -41,3 +46,9 @@ negotiation, missing schema, platform/scope/admission denial, delivery/report/re
 audit rollback, retry after disabling inventory, original receipt immutability,
 unknown-state reservation and verified release. The injected result is protocol evidence, not installation
 acceptance on a physical Windows endpoint.
+
+Burn profile checks pass against isolated PostgreSQL on native Linux ARM64,
+including private Windows/Mac separation, legacy omission and loss of either
+capability column. The same checks pass through the actual worker command in
+1.32 seconds. The common and model suites also pass. No managed device or
+production database is used.

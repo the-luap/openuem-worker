@@ -334,6 +334,7 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 				version := 0
 				recoveryVersion := 0
 				rotationVersion := 0
+				softwareBurnVersion := 0
 				softwareVersion := 0
 				softwareReconciliationVersion := 0
 				if identity.Platform == "macos" && access.HardwareReady(ctx) {
@@ -346,10 +347,11 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 					rotationVersion = enrollment.RotationVersion
 				}
 				if identity.Platform == "windows" && access.SoftwareReady(ctx) {
+					softwareBurnVersion = enrollment.SoftwareBurnVersion
 					softwareVersion = enrollment.SoftwareVersion
 					softwareReconciliationVersion = enrollment.SoftwareReconciliationVersion
 				}
-				w.agentConfigHandler(&checked, version, recoveryVersion, rotationVersion, softwareVersion, softwareReconciliationVersion)
+				w.agentConfigHandler(&checked, version, recoveryVersion, rotationVersion, softwareVersion, softwareReconciliationVersion, softwareBurnVersion)
 				return
 			}
 			handler(&checked)

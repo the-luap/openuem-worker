@@ -275,7 +275,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		t.Fatal(err)
 	}
 	var config openuem.Config
-	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareTaskVersion == enrollment.SoftwareVersion) != (platform == "windows") || (config.SoftwareReconciliationVersion == enrollment.SoftwareReconciliationVersion) != (platform == "windows") {
+	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareTaskVersion == enrollment.SoftwareVersion) != (platform == "windows") || (config.SoftwareReconciliationVersion == enrollment.SoftwareReconciliationVersion) != (platform == "windows") || (config.SoftwareBurnVersion == enrollment.SoftwareBurnVersion) != (platform == "windows") {
 		t.Fatal("private capability did not follow platform/schema")
 	}
 	if config.Ok {
@@ -286,7 +286,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	}
 	response, err = client.Request(configSubject, configBody, 2*time.Second)
 	config = openuem.Config{}
-	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareReconciliationVersion == enrollment.SoftwareReconciliationVersion) != (platform == "windows") {
+	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareReconciliationVersion == enrollment.SoftwareReconciliationVersion) != (platform == "windows") || (config.SoftwareBurnVersion == enrollment.SoftwareBurnVersion) != (platform == "windows") {
 		t.Fatal("configured hardware capability unavailable", err)
 	}
 	// The production-command fixture owns its Model in a separate process.
@@ -302,7 +302,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	}
 	response, err = workerConnection.Request("owned.legacy.agentconfig", configBody, 2*time.Second)
 	config = openuem.Config{}
-	if err != nil || json.Unmarshal(response.Data, &config) != nil || config.SoftwareTaskVersion != 0 || config.SoftwareReconciliationVersion != 0 || config.RecoveryTaskVersion != 0 || config.RotationTaskVersion != 0 || config.HardwareInventoryVersion != 0 {
+	if err != nil || json.Unmarshal(response.Data, &config) != nil || config.SoftwareTaskVersion != 0 || config.SoftwareBurnVersion != 0 || config.SoftwareReconciliationVersion != 0 || config.RecoveryTaskVersion != 0 || config.RotationTaskVersion != 0 || config.HardwareInventoryVersion != 0 {
 		t.Fatal("legacy configuration advertised an individual protocol", err)
 	}
 	if platform == "windows" {
@@ -311,11 +311,24 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		}
 		response, err = client.Request(configSubject, configBody, 2*time.Second)
 		config = openuem.Config{}
-		if err != nil || json.Unmarshal(response.Data, &config) != nil || config.SoftwareTaskVersion != 0 || config.SoftwareReconciliationVersion != 0 {
+		if err != nil || json.Unmarshal(response.Data, &config) != nil || config.SoftwareTaskVersion != 0 || config.SoftwareBurnVersion != 0 || config.SoftwareReconciliationVersion != 0 {
 			t.Fatal("incomplete software schema advertised", err)
 		}
 		if _, err := model.DB.Exec(`ALTER TABLE isolated_unavailable_reconciliations RENAME TO uem_agent_software_reconciliations`); err != nil {
 			t.Fatal(err)
+		}
+		for _, table := range []string{"uem_agent_software_recipients", "uem_agent_software_challenges"} {
+			if _, err := model.DB.Exec(`ALTER TABLE ` + table + ` RENAME COLUMN burn_version TO isolated_unavailable_burn_version`); err != nil {
+				t.Fatal(err)
+			}
+			response, err = client.Request(configSubject, configBody, 2*time.Second)
+			config = openuem.Config{}
+			if err != nil || json.Unmarshal(response.Data, &config) != nil || config.SoftwareTaskVersion != 0 || config.SoftwareBurnVersion != 0 || config.SoftwareReconciliationVersion != 0 {
+				t.Fatal("missing signed Burn capability storage was advertised", table, err)
+			}
+			if _, err := model.DB.Exec(`ALTER TABLE ` + table + ` RENAME COLUMN isolated_unavailable_burn_version TO burn_version`); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if platform == "macos" {
