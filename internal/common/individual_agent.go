@@ -21,13 +21,14 @@ import (
 var errIndividualRequest = errors.New("individual agent request denied")
 
 type individualPayload struct {
-	data      []byte
-	profileID int
-	taskIDs   []int
-	hardware  *enrollment.HardwareInventory
-	recovery  *enrollment.RecoveryRequest
-	rotation  *enrollment.RotationRequest
-	software  *enrollment.SoftwareRequest
+	data                   []byte
+	profileID              int
+	taskIDs                []int
+	hardware               *enrollment.HardwareInventory
+	recovery               *enrollment.RecoveryRequest
+	rotation               *enrollment.RotationRequest
+	software               *enrollment.SoftwareRequest
+	softwareReconciliation *enrollment.SoftwareReconciliationRequest
 }
 
 func decodeIndividual(data []byte, value any) error {
@@ -60,11 +61,22 @@ func bindIndividualPayload(identity registry.Identity, operation string, data []
 	var value any
 	switch operation {
 	case "software":
-		request, err := enrollment.DecodeSoftwareRequest(data, time.Now())
-		if err != nil || identity.Platform != "windows" || request.AgentID != identity.ID {
+		if identity.Platform != "windows" {
 			return nil, errIndividualRequest
 		}
-		result.software, value = request, request
+		request, err := enrollment.DecodeSoftwareRequest(data, time.Now())
+		if err == nil {
+			if request.AgentID != identity.ID {
+				return nil, errIndividualRequest
+			}
+			result.software, value = request, request
+		} else {
+			reconciliation, err := enrollment.DecodeSoftwareReconciliationRequest(data, time.Now())
+			if err != nil || reconciliation.AgentID != identity.ID {
+				return nil, errIndividualRequest
+			}
+			result.softwareReconciliation, value = reconciliation, reconciliation
+		}
 	case "rotation":
 		request, err := enrollment.DecodeRotationRequest(data)
 		if err != nil || identity.Platform != "macos" || request.AgentID != identity.ID {
@@ -218,7 +230,7 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 			checked := *message
 			checked.Data = payload.data
 			if operation == "software" {
-				if payload.software == nil {
+				if (payload.software == nil) == (payload.softwareReconciliation == nil) {
 					deny()
 					return
 				}
@@ -234,11 +246,17 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 					deny()
 					return
 				}
-				if w.Model.AuthorizeIndividualSoftware(ctx, tx, *identity, payload.software.Action == "result") != nil {
+				isReceipt := payload.software != nil && payload.software.Action == "result" || payload.softwareReconciliation != nil && payload.softwareReconciliation.Action == "result"
+				if w.Model.AuthorizeIndividualSoftware(ctx, tx, *identity, isReceipt) != nil {
 					deny()
 					return
 				}
-				reply, err := access.HandleSoftwareInTransaction(ctx, tx, *identity, *payload.software)
+				var reply any
+				if payload.software != nil {
+					reply, err = access.HandleSoftwareInTransaction(ctx, tx, *identity, *payload.software)
+				} else {
+					reply, err = access.HandleSoftwareReconciliationInTransaction(ctx, tx, *identity, *payload.softwareReconciliation)
+				}
 				if err != nil {
 					deny()
 					return
@@ -317,6 +335,7 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 				recoveryVersion := 0
 				rotationVersion := 0
 				softwareVersion := 0
+				softwareReconciliationVersion := 0
 				if identity.Platform == "macos" && access.HardwareReady(ctx) {
 					version = enrollment.HardwareInventoryVersion
 				}
@@ -328,8 +347,9 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 				}
 				if identity.Platform == "windows" && access.SoftwareReady(ctx) {
 					softwareVersion = enrollment.SoftwareVersion
+					softwareReconciliationVersion = enrollment.SoftwareReconciliationVersion
 				}
-				w.agentConfigHandler(&checked, version, recoveryVersion, rotationVersion, softwareVersion)
+				w.agentConfigHandler(&checked, version, recoveryVersion, rotationVersion, softwareVersion, softwareReconciliationVersion)
 				return
 			}
 			handler(&checked)

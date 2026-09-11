@@ -39,6 +39,34 @@ func TestIndividualSoftwarePayloadRejectsForeignAndNoncanonicalRequests(t *testi
 	}
 }
 
+func TestIndividualSoftwareReconciliationPayloadIsBoundAndDistinct(t *testing.T) {
+	i := registry.Identity{ID: uuid.NewString(), Scope: registry.Scope{TenantID: 1, SiteID: 2}, Platform: "windows"}
+	request := enrollment.SoftwareReconciliationRequest{Version: enrollment.SoftwareReconciliationVersion, Protocol: enrollment.SoftwareReconciliationProtocol, AgentID: i.ID, Action: "poll"}
+	data, _ := json.Marshal(request)
+	payload, err := bindIndividualPayload(i, "software", data)
+	if err != nil || payload.softwareReconciliation == nil || payload.software != nil || !bytes.Equal(payload.data, data) {
+		t.Fatal("read-only protocol was not selected distinctly", err)
+	}
+	for _, bad := range [][]byte{
+		append(bytes.Clone(data), ' '),
+		bytes.Replace(data, []byte(i.ID), []byte(uuid.NewString()), 1),
+		bytes.Replace(data, []byte(`"agent_id"`), []byte(`"Agent_ID"`), 1),
+		append([]byte(`{"agent_id":"foreign",`), data[1:]...),
+		append([]byte(`{"recipient_id":"`+uuid.NewString()+`",`), data[1:]...),
+		bytes.Repeat([]byte("x"), enrollment.MaxSoftwareMessage+1),
+	} {
+		if _, err := bindIndividualPayload(i, "software", bad); err == nil {
+			t.Fatal("ambiguous or foreign reconciliation body accepted")
+		}
+	}
+	for _, platform := range []string{"macos", "linux", ""} {
+		i.Platform = platform
+		if _, err := bindIndividualPayload(i, "software", data); err == nil {
+			t.Fatal("non-Windows device reached reconciliation")
+		}
+	}
+}
+
 func testIndividualSoftwareTransport(t *testing.T, db *sql.DB, store *registry.Store, client *nats.Conn, issued enrollment.Response, keys *enrollment.Keys, platform string) []byte {
 	t.Helper()
 	key, err := enrollment.NewSoftwareRecipientKey()
@@ -65,6 +93,11 @@ func testIndividualSoftwareTransport(t *testing.T, db *sql.DB, store *registry.S
 	if platform != "windows" {
 		if !strings.Contains(string(data), "denied") {
 			t.Fatal("Mac reached Windows software registration")
+		}
+		wire, _ := json.Marshal(enrollment.SoftwareReconciliationRequest{Version: enrollment.SoftwareReconciliationVersion, Protocol: enrollment.SoftwareReconciliationProtocol, AgentID: issued.DeviceID, Action: "poll"})
+		response, err := client.Request(subject, wire, 2*time.Second)
+		if err != nil || !strings.Contains(string(response.Data), "denied") {
+			t.Fatal("Mac reached Windows software reconciliation", err)
 		}
 		return nil
 	}
@@ -184,6 +217,7 @@ func testIndividualSoftwareTransport(t *testing.T, db *sql.DB, store *registry.S
 	if _, err = db.Exec(`UPDATE agents SET agent_status='Enabled' WHERE oid=$1`, issued.DeviceID); err != nil {
 		t.Fatal(err)
 	}
+	testIndividualSoftwareReconciliationTransport(t, db, store, client, issued, keys, key, recipient, plan, cert, root)
 	wire, _ := json.Marshal(poll)
 	return wire
 }

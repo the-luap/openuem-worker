@@ -19,8 +19,8 @@ import (
 var ErrAgentScope = errors.New("agent request scope is not authorized")
 
 // Software delivery keeps the exact Windows inventory scope locked until the
-// signed task/result and audit commit. Disabled agents can submit receipts for
-// existing work, but cannot obtain new execution authorization.
+// signed execution/reconciliation task, result and audit commit. Disabled agents
+// can submit receipts for existing work, but cannot obtain a new task.
 func (m *Model) AuthorizeIndividualSoftware(ctx context.Context, tx *sql.Tx, identity registry.Identity, receipt bool) error {
 	if tx == nil || identity.Platform != "windows" || !enrollment.ValidDeviceID(identity.ID) || identity.TenantID <= 0 || identity.SiteID <= 0 {
 		return ErrAgentScope

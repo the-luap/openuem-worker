@@ -275,8 +275,8 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		t.Fatal(err)
 	}
 	var config openuem.Config
-	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareTaskVersion == enrollment.SoftwareVersion) != (platform == "windows") {
-		t.Fatal("hardware capability did not follow platform/schema")
+	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareTaskVersion == enrollment.SoftwareVersion) != (platform == "windows") || (config.SoftwareReconciliationVersion == enrollment.SoftwareReconciliationVersion) != (platform == "windows") {
+		t.Fatal("private capability did not follow platform/schema")
 	}
 	if config.Ok {
 		t.Fatal("missing frequency settings reported successful configuration")
@@ -286,8 +286,34 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	}
 	response, err = client.Request(configSubject, configBody, 2*time.Second)
 	config = openuem.Config{}
-	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") {
+	if err != nil || json.Unmarshal(response.Data, &config) != nil || !config.Ok || config.AgentFrequency != 15 || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareReconciliationVersion == enrollment.SoftwareReconciliationVersion) != (platform == "windows") {
 		t.Fatal("configured hardware capability unavailable", err)
+	}
+	legacyConfig, err := workerConnection.Subscribe("owned.legacy.agentconfig", worker.AgentConfigHandler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacyConfig.Unsubscribe()
+	if err := workerConnection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	response, err = workerConnection.Request("owned.legacy.agentconfig", configBody, 2*time.Second)
+	config = openuem.Config{}
+	if err != nil || json.Unmarshal(response.Data, &config) != nil || config.SoftwareTaskVersion != 0 || config.SoftwareReconciliationVersion != 0 || config.RecoveryTaskVersion != 0 || config.RotationTaskVersion != 0 || config.HardwareInventoryVersion != 0 {
+		t.Fatal("legacy configuration advertised an individual protocol", err)
+	}
+	if platform == "windows" {
+		if _, err := model.DB.Exec(`ALTER TABLE uem_agent_software_reconciliations RENAME TO isolated_unavailable_reconciliations`); err != nil {
+			t.Fatal(err)
+		}
+		response, err = client.Request(configSubject, configBody, 2*time.Second)
+		config = openuem.Config{}
+		if err != nil || json.Unmarshal(response.Data, &config) != nil || config.SoftwareTaskVersion != 0 || config.SoftwareReconciliationVersion != 0 {
+			t.Fatal("incomplete software schema advertised", err)
+		}
+		if _, err := model.DB.Exec(`ALTER TABLE isolated_unavailable_reconciliations RENAME TO uem_agent_software_reconciliations`); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if platform == "macos" {
 		var receipt enrollment.HardwareReceipt
