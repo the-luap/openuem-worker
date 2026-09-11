@@ -18,6 +18,36 @@ import (
 
 var ErrAgentScope = errors.New("agent request scope is not authorized")
 
+// Software delivery keeps the exact Windows inventory scope locked until the
+// signed task/result and audit commit. Disabled agents can submit receipts for
+// existing work, but cannot obtain new execution authorization.
+func (m *Model) AuthorizeIndividualSoftware(ctx context.Context, tx *sql.Tx, identity registry.Identity, receipt bool) error {
+	if tx == nil || identity.Platform != "windows" || !enrollment.ValidDeviceID(identity.ID) || identity.TenantID <= 0 || identity.SiteID <= 0 {
+		return ErrAgentScope
+	}
+	var id string
+	if err := tx.QueryRowContext(ctx, `SELECT oid FROM agents WHERE oid=$1 AND lower(os)='windows' AND ($2 OR agent_status IN ('Enabled','No contact')) FOR UPDATE`, identity.ID, receipt).Scan(&id); err != nil {
+		return ErrAgentScope
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT e.site_id,s.tenant_sites FROM site_agents e JOIN sites s ON s.id=e.site_id WHERE e.agent_id=$1 ORDER BY e.site_id LIMIT 2 FOR SHARE OF e,s`, identity.ID)
+	if err != nil {
+		return ErrAgentScope
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var siteID, tenantID int
+		if rows.Scan(&siteID, &tenantID) != nil || siteID != identity.SiteID || tenantID != identity.TenantID {
+			return ErrAgentScope
+		}
+		count++
+	}
+	if rows.Err() != nil || count != 1 {
+		return ErrAgentScope
+	}
+	return nil
+}
+
 // AuthorizeIndividualRotation holds the inventory row, all scope edges and site
 // ownership until the caller commits registry delivery/result and audit. Locking
 // the parent row FOR UPDATE also prevents a concurrent FK-backed edge insertion;

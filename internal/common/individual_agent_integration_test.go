@@ -275,7 +275,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		t.Fatal(err)
 	}
 	var config openuem.Config
-	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") {
+	if json.Unmarshal(response.Data, &config) != nil || (config.HardwareInventoryVersion == 1) != (platform == "macos") || (config.RecoveryTaskVersion == 1) != (platform == "macos") || (config.RotationTaskVersion == enrollment.RotationVersion) != (platform == "macos") || (config.SoftwareTaskVersion == enrollment.SoftwareVersion) != (platform == "windows") {
 		t.Fatal("hardware capability did not follow platform/schema")
 	}
 	if config.Ok {
@@ -321,6 +321,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 	} else if !strings.Contains(string(sendHardware(hardware)), "denied") {
 		t.Fatal("Windows identity wrote Mac evidence")
 	}
+	softwarePoll := testIndividualSoftwareTransport(t, model.DB, store, client, *issued, keys, platform)
 	recoveryPoll, rotationPoll := testIndividualRecoveryTransport(t, model.DB, client, *issued, keys, platform)
 	if err = store.RevokeIdentity(ctx, scope, issued.DeviceID, "test-admin"); err != nil {
 		t.Fatal(err)
@@ -338,6 +339,13 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 		response, err := client.Request(subject, recoveryPoll, 2*time.Second)
 		if err != nil || !strings.Contains(string(response.Data), "denied") {
 			t.Fatal("revoked agent polled recovery tasks", err)
+		}
+	}
+	if softwarePoll != nil {
+		subject, _ := enrollment.RequestSubject(issued.DeviceID, "software")
+		response, err := client.Request(subject, softwarePoll, 2*time.Second)
+		if err != nil || !strings.Contains(string(response.Data), "denied") {
+			t.Fatal("revoked agent polled software", err)
 		}
 	}
 	if rotationPoll != nil {

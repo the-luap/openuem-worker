@@ -27,6 +27,7 @@ type individualPayload struct {
 	hardware  *enrollment.HardwareInventory
 	recovery  *enrollment.RecoveryRequest
 	rotation  *enrollment.RotationRequest
+	software  *enrollment.SoftwareRequest
 }
 
 func decodeIndividual(data []byte, value any) error {
@@ -58,6 +59,12 @@ func bindIndividualPayload(identity registry.Identity, operation string, data []
 	result := &individualPayload{}
 	var value any
 	switch operation {
+	case "software":
+		request, err := enrollment.DecodeSoftwareRequest(data, time.Now())
+		if err != nil || identity.Platform != "windows" || request.AgentID != identity.ID {
+			return nil, errIndividualRequest
+		}
+		result.software, value = request, request
 	case "rotation":
 		request, err := enrollment.DecodeRotationRequest(data)
 		if err != nil || identity.Platform != "macos" || request.AgentID != identity.ID {
@@ -174,7 +181,7 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 	}
 	for _, operation := range enrollment.Operations() {
 		handler := handlers[operation]
-		if handler == nil && operation != "hardware" && operation != "recovery" && operation != "rotation" {
+		if handler == nil && operation != "hardware" && operation != "recovery" && operation != "rotation" && operation != "software" {
 			rollback()
 			return errIndividualRequest
 		}
@@ -210,6 +217,40 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 			}
 			checked := *message
 			checked.Data = payload.data
+			if operation == "software" {
+				if payload.software == nil {
+					deny()
+					return
+				}
+				tx, err := w.Model.DB.BeginTx(ctx, nil)
+				if err != nil {
+					deny()
+					return
+				}
+				defer tx.Rollback()
+				// The current identity lock precedes inventory locks everywhere.
+				// Recheck it after audit and commit before releasing any envelope.
+				if _, _, _, err = access.SoftwareIdentity(ctx, tx, identity.Scope, identity.ID); err != nil {
+					deny()
+					return
+				}
+				if w.Model.AuthorizeIndividualSoftware(ctx, tx, *identity, payload.software.Action == "result") != nil {
+					deny()
+					return
+				}
+				reply, err := access.HandleSoftwareInTransaction(ctx, tx, *identity, *payload.software)
+				if err != nil {
+					deny()
+					return
+				}
+				data, err := json.Marshal(reply)
+				if err != nil || len(data) > enrollment.MaxSoftwareMessage || tx.Commit() != nil {
+					deny()
+					return
+				}
+				_ = message.Respond(data)
+				return
+			}
 			if operation == "rotation" {
 				if payload.rotation == nil {
 					deny()
@@ -275,6 +316,7 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 				version := 0
 				recoveryVersion := 0
 				rotationVersion := 0
+				softwareVersion := 0
 				if identity.Platform == "macos" && access.HardwareReady(ctx) {
 					version = enrollment.HardwareInventoryVersion
 				}
@@ -284,7 +326,10 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 				if identity.Platform == "macos" && access.RotationReady(ctx) {
 					rotationVersion = enrollment.RotationVersion
 				}
-				w.agentConfigHandler(&checked, version, recoveryVersion, rotationVersion)
+				if identity.Platform == "windows" && access.SoftwareReady(ctx) {
+					softwareVersion = enrollment.SoftwareVersion
+				}
+				w.agentConfigHandler(&checked, version, recoveryVersion, rotationVersion, softwareVersion)
 				return
 			}
 			handler(&checked)
@@ -322,6 +367,11 @@ func (w *Worker) SubscribeIndividualAgentQueues() error {
 			ctx, cancel = context.WithTimeout(requestContext, 5*time.Second)
 			if access.RotationReady(ctx) && access.ExpireRotationTasks(ctx) != nil && requestContext.Err() == nil {
 				log.Print("[ERROR]: private rotation task maintenance failed")
+			}
+			cancel()
+			ctx, cancel = context.WithTimeout(requestContext, 5*time.Second)
+			if access.SoftwareReady(ctx) && access.ExpireSoftwareTasks(ctx) != nil && requestContext.Err() == nil {
+				log.Print("[ERROR]: private software task maintenance failed")
 			}
 			cancel()
 			select {
