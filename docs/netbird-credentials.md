@@ -1,39 +1,29 @@
-# NetBird credentials and bounded provider requests
+# NetBird profile migration and provider credentials
 
-NetBird registration tasks decode access tokens with the shared bounded
-`github.com/open-uem/nats/legacysecret` reader. Decryption uses a local value.
-Successful decryption continues peer lookup and one-off key creation, then
-preserves subsequent tasks. It does not return an empty successful configuration
-or alter stored ciphertext. Output follows task order without sorting the input
-slice in place.
+The managed NetBird connection-command migration rejects legacy NetBird profile
+mutations. `GenerateNetbirdConfig` returns an explicit admission error for any
+active install, uninstall or registration step before reading provider settings,
+decrypting tokens, looking up peers or creating setup keys. Disabled steps and
+profiles without NetBird mutations return an empty NetBird configuration.
 
-Short legacy hex and ordinary plaintext remain readable. Plausible AES-GCM hex
-must authenticate. Wrong/missing keys, corrupt/oversized values and empty tokens
-fail before that registration task contacts the provider. Configuration reads
-select bounded URL/token fields for exactly the task's organization; there is no
-fallback or creation while reading. Generation has a 30-second overall context.
+Current dispatch callers withhold the entire profile after this error, including
+its other task types. This temporary restriction prevents provider side effects
+for tasks that the updated agent would reject. It does not represent completed
+managed profile support. No saved tasks, order values or credentials are changed.
+Deploy compatible console, agent and worker versions together; there is no
+automatic protocol negotiation or fallback to legacy mutation messages.
 
-Provider calls use the shared `netbirdapi` package: verified HTTPS, five-second
-requests, one MiB responses, encoded peer filters, checked success statuses and
-no redirects. Returned peer names are checked. Setup keys use structured JSON
-with one-off use, a one-day lifetime and usage limit one. Group input is validated
-before constructing JSON. Numeric and string key IDs are supported; masked,
-revoked and reusable responses are rejected. POST bodies cannot be replayed after
-an ambiguous reused-connection failure, and there is no application retry.
+Owned PostgreSQL and local TLS fixtures verify rejection without any provider
+request for plaintext, encrypted, corrupt, missing-key and empty credentials.
+The original stored credential value remains unchanged. Order regression tests
+continue to exercise WinGet and Ansible generation and check stored-task
+immutability when NetBird generation is rejected. Full model/common PostgreSQL
+race suites pass in 2.861 and 3.560 seconds.
 
-Use compatible workers and matching master keys for the console's audited token
-migration. Existing HTTP management URLs must be changed to HTTPS with a trusted
-certificate before this upgrade. There is no automatic version negotiation or
-master-key rotation.
-
-Owned PostgreSQL and local TLS provider tests verify plaintext Authorization,
-one-off policy, subsequent tasks, stable stored ciphertext and failure before
-provider contact for unreadable tokens. Existing profile-order tests cover the
-three configuration generators. Shared transport tests cover protocol/identity
-validation, redirects, response bounds, cancellation and unretried creation.
-
-Durable NetBird command admission/recovery and source/authority held throughout
-provider operations remain open. A timeout can follow an actual remote mutation;
-earlier setup-key effects are not rolled back if a later task fails. This is not
-exactly-once registration or complete provider security. Production provider and
-physical endpoint acceptance remain separate.
+Staged managed installation/registration must persist admission, provider key
+creation, delivery and cleanup evidence with current authority before this path
+can be enabled. Lost provider responses must not cause another key creation.
+Authoritative peer association, trusted installers and physical/provider
+acceptance also remain open. Shared `netbirdapi` transport validation and its
+owned tests remain available for the future integration; they alone do not
+provide durable lifecycle semantics.

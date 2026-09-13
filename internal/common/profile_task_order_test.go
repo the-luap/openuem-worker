@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -53,7 +52,7 @@ func profileOrderTestModel(t *testing.T) *models.Model {
 	return model
 }
 
-func TestProfileTaskOrderSurvivesAllThreeConfigurationGenerators(t *testing.T) {
+func TestProfileTaskOrderSurvivesSupportedGeneratorsAndNetbirdRejection(t *testing.T) {
 	m := profileOrderTestModel(t)
 	ctx := t.Context()
 	worker := &Worker{Model: m}
@@ -109,8 +108,6 @@ func TestProfileTaskOrderSurvivesAllThreeConfigurationGenerators(t *testing.T) {
 					expected = append(expected, fmt.Sprintf("task_%d_3", id))
 				case "ansible":
 					expected = append(expected, fmt.Sprintf("task_%d", id))
-				default:
-					expected = append(expected, strconv.Itoa(id))
 				}
 			}
 			actual := []string{}
@@ -141,11 +138,8 @@ func TestProfileTaskOrderSurvivesAllThreeConfigurationGenerators(t *testing.T) {
 				}
 			case "netbird":
 				config, err := worker.GenerateNetbirdConfig(profiles[0], agentID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, entry := range config {
-					actual = append(actual, entry.ID)
+				if err == nil || !strings.Contains(err.Error(), "managed command admission") || config != nil {
+					t.Fatalf("legacy NetBird profile must require managed command admission: config=%v, err=%v", config, err)
 				}
 			}
 			if !slices.Equal(actual, expected) {

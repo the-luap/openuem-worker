@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,7 +15,26 @@ import (
 	"github.com/open-uem/utils"
 )
 
-func TestNetbirdEncryptedCredentialsPreserveFollowingTasks(t *testing.T) {
+func TestNetbirdProfileAdmissionWithoutModelOrProvider(t *testing.T) {
+	w := &Worker{}
+	for _, kind := range []task.Type{task.TypeNetbirdInstall, task.TypeNetbirdUninstall, task.TypeNetbirdRegister} {
+		p := &ent.Profile{Edges: ent.ProfileEdges{Tasks: []*ent.Task{
+			{Type: task.TypeUnixScript}, {Type: kind, Disabled: true},
+		}}}
+		if config, err := w.GenerateNetbirdConfig(p, "owned-device"); err != nil || len(config) != 0 {
+			t.Fatalf("disabled %s must not withhold other tasks: %v", kind, err)
+		}
+		p.Edges.Tasks[1].Disabled = false
+		if config, err := w.GenerateNetbirdConfig(p, "owned-device"); err == nil || config != nil {
+			t.Fatalf("active %s must require admission without accessing a model", kind)
+		}
+	}
+	if config, err := w.GenerateNetbirdConfig(&ent.Profile{}, "owned-device"); err != nil || len(config) != 0 {
+		t.Fatal("empty profile must not require NetBird admission")
+	}
+}
+
+func TestNetbirdLegacyProfilesCannotReadCredentialsOrCreateKeys(t *testing.T) {
 	m := profileOrderTestModel(t)
 	ctx := t.Context()
 	organization, err := m.Client.Tenant.Create().SetDescription("Owned NetBird secret organization").Save(ctx)
@@ -98,21 +116,13 @@ func TestNetbirdEncryptedCredentialsPreserveFollowingTasks(t *testing.T) {
 			before := requests.Load()
 			worker := &Worker{Model: m, EncryptionMasterKey: entry.key, netbirdHTTPTransport: provider.Client().Transport}
 			actual, err := worker.GenerateNetbirdConfig(profile, agentID)
-			if !entry.valid {
-				if err == nil || actual != nil || requests.Load() != before {
-					t.Fatal("unreadable NetBird token produced configuration or contacted the provider")
-				}
-				return
+			if err == nil || actual != nil || requests.Load() != before {
+				t.Fatal("legacy NetBird profile produced a mutation or contacted its provider")
 			}
-			if err != nil || len(actual) != 2 {
-				t.Fatal("NetBird token decryption dropped configuration or following tasks", err)
+			if !strings.Contains(err.Error(), "managed command admission") {
+				t.Fatal("legacy refusal did not explain required migration", err)
 			}
-			if actual[0].ID != strconv.Itoa(101) || !actual[0].Register || actual[0].RegisterInfo.OneOffKey != "owned-one-off-key" || actual[0].RegisterInfo.ManagementURL != provider.URL || actual[1].ID != strconv.Itoa(102) || !actual[1].Install {
-				t.Fatal("NetBird configuration lost registration or the following install task")
-			}
-			if requests.Load()-before != 2 {
-				t.Fatal("NetBird generated an unexpected number of provider requests")
-			}
+
 			stored, err := m.Client.NetbirdSettings.Get(ctx, configuration.ID)
 			if err != nil || stored.AccessToken != entry.stored {
 				t.Fatal("NetBird decryption changed stored credentials")

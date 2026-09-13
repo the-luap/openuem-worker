@@ -4,21 +4,18 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"slices"
 	"strconv"
-	"strings"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/open-uem/ent"
 	"github.com/open-uem/ent/agent"
 	"github.com/open-uem/ent/task"
 	openuem_nats "github.com/open-uem/nats"
-	"github.com/open-uem/nats/legacysecret"
-	"github.com/open-uem/nats/netbirdapi"
 	"github.com/open-uem/nats/tasksecrets"
 	"github.com/open-uem/wingetcfg/wingetcfg"
 
@@ -806,85 +803,26 @@ func (w *Worker) GenerateAnsibleConfig(profile *ent.Profile, agentID string) (*a
 	return pb, nil
 }
 
+// GenerateNetbirdConfig refuses legacy mutation delivery before accessing provider
+// credentials or creating setup keys. These stages require durable admission and
+// cannot share the old profile retry path with managed device commands.
 func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]*openuem_nats.NetbirdTask, error) {
-	if len(profile.Edges.Tasks) == 0 {
-		return []*openuem_nats.NetbirdTask{}, nil
+	if profile == nil {
+		return nil, errors.New("NetBird profile is unavailable")
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	a, err := w.Model.Client.Agent.Query().WithNetbird().Where(agent.ID(agentID)).Only(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	tasks := []*openuem_nats.NetbirdTask{}
-
-	idCmp := func(a, b *ent.Task) int {
-		return cmp.Compare(a.Order, b.Order)
-	}
-
-	ordered := slices.Clone(profile.Edges.Tasks)
-	slices.SortStableFunc(ordered, idCmp)
-
-	for _, t := range ordered {
-		// ignore disabled tasks
+	for _, t := range profile.Edges.Tasks {
+		if t == nil {
+			return nil, errors.New("NetBird profile contains an invalid task")
+		}
 		if t.Disabled {
 			continue
 		}
-
-		nt := openuem_nats.NetbirdTask{}
-		nt.ID = strconv.Itoa(t.ID)
 		switch t.Type {
-		case task.TypeNetbirdInstall:
-			if a.Edges.Netbird == nil || (a.Edges.Netbird != nil && !a.Edges.Netbird.Installed) {
-				nt.Install = true
-				tasks = append(tasks, &nt)
-			}
-		case task.TypeNetbirdUninstall:
-			if a.Edges.Netbird == nil || (a.Edges.Netbird != nil && a.Edges.Netbird.Installed) {
-				nt.Uninstall = true
-				tasks = append(tasks, &nt)
-			}
-		case task.TypeNetbirdRegister:
-			ns, err := w.Model.GetNetbirdSettings(ctx, t.Tenant)
-			if err != nil {
-				return nil, err
-			}
-
-			accessToken, err := legacysecret.Open(ns.AccessToken, w.EncryptionMasterKey)
-			if err != nil || accessToken == "" {
-				return nil, legacysecret.ErrUnavailable
-			}
-
-			// check if a netbird peer with this name exists
-			exists, err := netbirdapi.PeerExists(ctx, w.netbirdHTTPTransport, ns.ManagementURL, accessToken, strings.ToLower(a.Hostname))
-			if err != nil {
-				return nil, err
-			}
-
-			// Peer not exists, so let's create a one-off key
-			if !exists {
-				nt.Register = true
-				nt.RegisterInfo = openuem_nats.NetbirdSettings{}
-
-				groups, err := netbirdapi.ParseGroups(t.NetbirdGroups)
-				if err != nil {
-					return nil, err
-				}
-				key, err := netbirdapi.CreateOneOffKey(ctx, w.netbirdHTTPTransport, ns.ManagementURL, accessToken, agentID, groups, t.NetbirdAllowExtraDNSLabels)
-				if err != nil {
-					return nil, err
-				}
-
-				nt.RegisterInfo.ManagementURL = ns.ManagementURL
-				nt.RegisterInfo.OneOffKey = key.Key
-				tasks = append(tasks, &nt)
-			}
+		case task.TypeNetbirdInstall, task.TypeNetbirdUninstall, task.TypeNetbirdRegister:
+			return nil, errors.New("NetBird profile mutations require managed command admission")
 		}
 	}
-
-	return tasks, nil
+	return []*openuem_nats.NetbirdTask{}, nil
 }
 
 func (w *Worker) WinGetCfgDeploymentReport(msg *nats.Msg) {

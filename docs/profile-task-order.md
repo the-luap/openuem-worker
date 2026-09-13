@@ -1,5 +1,11 @@
 # Deterministic task order in generated profiles
 
+The later [managed NetBird migration](netbird-credentials.md) temporarily rejects
+active legacy NetBird profile steps and withholds their profiles. The ordering
+implementation below still applies to supported WinGet/Ansible generation and
+all stored profile reads. Current NetBird regression coverage asserts rejection
+and unchanged stored tasks rather than generating legacy mutations.
+
 The worker now loads tasks for all four assigned-profile queries in stored order,
 then task ID, with PostgreSQL's ascending NULL placement. This matches the console's
 read-only task list. Profiles assigned to all devices or through tags, including
