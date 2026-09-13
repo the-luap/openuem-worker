@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"log"
+	"net/http"
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/nats-io/nats.go"
@@ -17,6 +18,7 @@ import (
 )
 
 type Worker struct {
+	netbirdHTTPTransport   http.RoundTripper
 	NATSConnection         *nats.Conn
 	NATSConnectJob         gocron.Job
 	NATSServers            string

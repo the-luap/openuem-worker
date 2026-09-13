@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/open-uem/ent"
@@ -17,8 +18,8 @@ import (
 	"github.com/open-uem/ent/task"
 	openuem_nats "github.com/open-uem/nats"
 	"github.com/open-uem/nats/legacysecret"
+	"github.com/open-uem/nats/netbirdapi"
 	"github.com/open-uem/nats/tasksecrets"
-	"github.com/open-uem/utils"
 	"github.com/open-uem/wingetcfg/wingetcfg"
 
 	ansiblecfg "github.com/open-uem/openuem-ansible-config/ansible"
@@ -810,7 +811,9 @@ func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]
 		return []*openuem_nats.NetbirdTask{}, nil
 	}
 
-	a, err := w.Model.Client.Agent.Query().WithNetbird().Where(agent.ID(agentID)).Only(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	a, err := w.Model.Client.Agent.Query().WithNetbird().Where(agent.ID(agentID)).Only(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -821,9 +824,10 @@ func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]
 		return cmp.Compare(a.Order, b.Order)
 	}
 
-	slices.SortFunc(profile.Edges.Tasks, idCmp)
+	ordered := slices.Clone(profile.Edges.Tasks)
+	slices.SortStableFunc(ordered, idCmp)
 
-	for _, t := range profile.Edges.Tasks {
+	for _, t := range ordered {
 		// ignore disabled tasks
 		if t.Disabled {
 			continue
@@ -843,7 +847,7 @@ func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]
 				tasks = append(tasks, &nt)
 			}
 		case task.TypeNetbirdRegister:
-			ns, err := w.Model.GetNetbirdSettings(t.Tenant)
+			ns, err := w.Model.GetNetbirdSettings(ctx, t.Tenant)
 			if err != nil {
 				return nil, err
 			}
@@ -854,7 +858,7 @@ func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]
 			}
 
 			// check if a netbird peer with this name exists
-			exists, err := utils.NetBirdPeerExists(strings.ToLower(a.Hostname), ns.ManagementURL, accessToken)
+			exists, err := netbirdapi.PeerExists(ctx, w.netbirdHTTPTransport, ns.ManagementURL, accessToken, strings.ToLower(a.Hostname))
 			if err != nil {
 				return nil, err
 			}
@@ -864,13 +868,17 @@ func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]
 				nt.Register = true
 				nt.RegisterInfo = openuem_nats.NetbirdSettings{}
 
-				_, key, err := utils.CreateNetBirdOneOffSetupKeyAPI(ns.ManagementURL, agentID, t.NetbirdGroups, t.NetbirdAllowExtraDNSLabels, accessToken)
+				groups, err := netbirdapi.ParseGroups(t.NetbirdGroups)
+				if err != nil {
+					return nil, err
+				}
+				key, err := netbirdapi.CreateOneOffKey(ctx, w.netbirdHTTPTransport, ns.ManagementURL, accessToken, agentID, groups, t.NetbirdAllowExtraDNSLabels)
 				if err != nil {
 					return nil, err
 				}
 
 				nt.RegisterInfo.ManagementURL = ns.ManagementURL
-				nt.RegisterInfo.OneOffKey = key
+				nt.RegisterInfo.OneOffKey = key.Key
 				tasks = append(tasks, &nt)
 			}
 		}

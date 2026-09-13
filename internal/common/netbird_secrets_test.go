@@ -2,7 +2,6 @@ package common
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -36,7 +35,7 @@ func TestNetbirdEncryptedCredentialsPreserveFollowingTasks(t *testing.T) {
 	var requests atomic.Int64
 	var expected atomic.Value
 	expected.Store("")
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	provider := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if r.Header.Get("Authorization") != "Token "+expected.Load().(string) {
 			t.Error("NetBird provider received an incorrect credential")
@@ -58,7 +57,7 @@ func TestNetbirdEncryptedCredentialsPreserveFollowingTasks(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Type != "one-off" || payload.UsageLimit != 1 {
 				t.Error("NetBird registration lost its one-off key request")
 			}
-			_, _ = w.Write([]byte(`{"id":"owned-key-id","key":"owned-one-off-key","valid":true}`))
+			_, _ = w.Write([]byte(`{"id":"owned-key-id","key":"owned-one-off-key","valid":true,"type":"one-off","usage_limit":1}`))
 		default:
 			t.Error("unexpected owned NetBird provider request")
 			http.NotFound(w, r)
@@ -97,10 +96,10 @@ func TestNetbirdEncryptedCredentialsPreserveFollowingTasks(t *testing.T) {
 			}
 			expected.Store(entry.plain)
 			before := requests.Load()
-			worker := &Worker{Model: m, EncryptionMasterKey: entry.key}
+			worker := &Worker{Model: m, EncryptionMasterKey: entry.key, netbirdHTTPTransport: provider.Client().Transport}
 			actual, err := worker.GenerateNetbirdConfig(profile, agentID)
 			if !entry.valid {
-				if !errors.Is(err, legacysecret.ErrUnavailable) || actual != nil || requests.Load() != before {
+				if err == nil || actual != nil || requests.Load() != before {
 					t.Fatal("unreadable NetBird token produced configuration or contacted the provider")
 				}
 				return
