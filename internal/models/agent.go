@@ -33,6 +33,7 @@ import (
 	"github.com/open-uem/ent/tenant"
 	"github.com/open-uem/ent/update"
 	"github.com/open-uem/nats"
+	"github.com/open-uem/nats/netbirdstate"
 	"github.com/open-uem/utils"
 )
 
@@ -660,6 +661,18 @@ func (m *Model) SaveRemoteAssistanceAgentSetting(request nats.RemoteConfigReques
 }
 
 func (m *Model) SaveNetbirdInfo(data *nats.AgentReport) error {
+	if data == nil {
+		return errors.New("NetBird observation is unavailable")
+	}
+	if data.Netbird.Error != "" {
+		return errors.New("NetBird observation is unavailable")
+	}
+	profiles, err := netbirdstate.Encode(data.Netbird)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	return m.Client.Netbird.
 		Create().
 		SetVersion(data.Netbird.Version).
@@ -674,12 +687,12 @@ func (m *Model) SaveNetbirdInfo(data *nats.AgentReport) error {
 		SetPeersConnected(data.Netbird.PeersConnected).
 		SetPeersTotal(data.Netbird.PeersTotal).
 		SetServiceStatus(data.Netbird.ServiceStatus).
-		SetProfilesAvailable(strings.Join(data.Netbird.Profiles, ",")).
+		SetProfilesAvailable(profiles).
 		SetDNSServer(strings.Join(data.Netbird.DNSServers, ",")).
 		SetOwnerID(data.AgentID).
 		OnConflictColumns(netbird.OwnerColumn).
 		UpdateNewValues().
-		Exec(context.Background())
+		Exec(ctx)
 }
 
 func (m *Model) SaveReleaseInfo(data *nats.AgentReport) error {
