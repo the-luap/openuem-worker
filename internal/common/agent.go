@@ -16,6 +16,7 @@ import (
 	"github.com/open-uem/ent/agent"
 	"github.com/open-uem/ent/task"
 	openuem_nats "github.com/open-uem/nats"
+	"github.com/open-uem/nats/legacysecret"
 	"github.com/open-uem/nats/tasksecrets"
 	"github.com/open-uem/utils"
 	"github.com/open-uem/wingetcfg/wingetcfg"
@@ -847,21 +848,13 @@ func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]
 				return nil, err
 			}
 
-			// decrypt NetBird Access token if key is set
-			if w.EncryptionMasterKey != "" {
-				isAccessTokenEncrypted, err := utils.IsSensitiveFieldEncrypted(ns.AccessToken, w.EncryptionMasterKey)
-				if err != nil {
-					return nil, err
-				}
-
-				if isAccessTokenEncrypted {
-					ns.AccessToken, err = utils.DecryptSensitiveField(ns.AccessToken, w.EncryptionMasterKey)
-					return nil, err
-				}
+			accessToken, err := legacysecret.Open(ns.AccessToken, w.EncryptionMasterKey)
+			if err != nil || accessToken == "" {
+				return nil, legacysecret.ErrUnavailable
 			}
 
 			// check if a netbird peer with this name exists
-			exists, err := utils.NetBirdPeerExists(strings.ToLower(a.Hostname), ns.ManagementURL, ns.AccessToken)
+			exists, err := utils.NetBirdPeerExists(strings.ToLower(a.Hostname), ns.ManagementURL, accessToken)
 			if err != nil {
 				return nil, err
 			}
@@ -871,7 +864,7 @@ func (w *Worker) GenerateNetbirdConfig(profile *ent.Profile, agentID string) ([]
 				nt.Register = true
 				nt.RegisterInfo = openuem_nats.NetbirdSettings{}
 
-				_, key, err := utils.CreateNetBirdOneOffSetupKeyAPI(ns.ManagementURL, agentID, t.NetbirdGroups, t.NetbirdAllowExtraDNSLabels, ns.AccessToken)
+				_, key, err := utils.CreateNetBirdOneOffSetupKeyAPI(ns.ManagementURL, agentID, t.NetbirdGroups, t.NetbirdAllowExtraDNSLabels, accessToken)
 				if err != nil {
 					return nil, err
 				}
