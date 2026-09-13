@@ -16,6 +16,7 @@ import (
 	"github.com/open-uem/ent/agent"
 	"github.com/open-uem/ent/task"
 	openuem_nats "github.com/open-uem/nats"
+	"github.com/open-uem/nats/tasksecrets"
 	"github.com/open-uem/utils"
 	"github.com/open-uem/wingetcfg/wingetcfg"
 
@@ -512,20 +513,12 @@ func (w *Worker) GenerateWinGetConfig(profile *ent.Profile) (*wingetcfg.WinGetCf
 			}
 			cfg.AddResource(registryKey)
 		case task.TypeAddLocalUser:
-			// decrypt local user password if key is set
-			if w.EncryptionMasterKey != "" {
-				isPasswordEncrypted, err := utils.IsSensitiveFieldEncrypted(t.LocalUserPassword, w.EncryptionMasterKey)
-				if err != nil {
-					return nil, err
-				}
-
-				if isPasswordEncrypted {
-					t.LocalUserPassword, err = utils.DecryptSensitiveField(t.LocalUserPassword, w.EncryptionMasterKey)
-					return nil, err
-				}
+			password, err := tasksecrets.OpenPassword(t.LocalUserPassword, w.EncryptionMasterKey)
+			if err != nil {
+				return nil, err
 			}
 
-			localUser, err := wingetcfg.AddOrModifyLocalUser(taskID, t.LocalUserUsername, t.LocalUserDescription, t.LocalUserDisable, t.LocalUserFullname, t.LocalUserPassword, t.LocalUserPasswordChangeNotAllowed, t.LocalUserPasswordChangeRequired, t.LocalUserPasswordNeverExpires)
+			localUser, err := wingetcfg.AddOrModifyLocalUser(taskID, t.LocalUserUsername, t.LocalUserDescription, t.LocalUserDisable, t.LocalUserFullname, password, t.LocalUserPasswordChangeNotAllowed, t.LocalUserPasswordChangeRequired, t.LocalUserPasswordNeverExpires)
 			if err != nil {
 				return nil, err
 			}
@@ -717,24 +710,20 @@ func (w *Worker) GenerateAnsibleConfig(profile *ent.Profile, agentID string) (*a
 				}
 			}
 
-			// decrypt local user password if key is set
-			if w.EncryptionMasterKey != "" {
-				isAccessTokenEncrypted, err := utils.IsSensitiveFieldEncrypted(t.LocalUserPassword, w.EncryptionMasterKey)
-				if err != nil {
-					return nil, err
-				}
-
-				if isAccessTokenEncrypted {
-					t.LocalUserPassword, err = utils.DecryptSensitiveField(t.LocalUserPassword, w.EncryptionMasterKey)
-					return nil, err
-				}
+			password, err := tasksecrets.OpenPassword(t.LocalUserPassword, w.EncryptionMasterKey)
+			if err != nil {
+				return nil, err
+			}
+			passphrase, err := tasksecrets.OpenSSH(t.LocalUserSSHKeyPassphrase, w.EncryptionMasterKey)
+			if err != nil {
+				return nil, err
 			}
 
 			addLinuxUser, err := ansiblecfg.AddLocalUser(fmt.Sprintf("task_%d", t.ID), t.LocalUserAppend, t.LocalUserDescription,
 				t.LocalUserCreateHome, expires, t.LocalUserForce, t.LocalUserGenerateSSHKey, t.LocalUserGroup, t.LocalUserGroups,
-				t.LocalUserHome, t.LocalUserUsername, t.LocalUserNonunique, t.LocalUserPassword, password_expire_account_disable, password_expire_max,
+				t.LocalUserHome, t.LocalUserUsername, t.LocalUserNonunique, password, password_expire_account_disable, password_expire_max,
 				password_expire_min, password_expire_warn, t.LocalUserPasswordLock, t.LocalUserShell, t.LocalUserSkeleton, ssh_key_bits,
-				t.LocalUserSSHKeyComment, t.LocalUserSSHKeyFile, t.LocalUserSSHKeyPassphrase, t.LocalUserSSHKeyType,
+				t.LocalUserSSHKeyComment, t.LocalUserSSHKeyFile, passphrase, t.LocalUserSSHKeyType,
 				t.LocalUserSystem, t.LocalUserUmask, uid, uid_max, uid_min, t.AgentType.String(), t.IgnoreErrors)
 
 			if err != nil {
@@ -742,7 +731,7 @@ func (w *Worker) GenerateAnsibleConfig(profile *ent.Profile, agentID string) (*a
 			}
 			pb.AddAnsibleTask(addLinuxUser)
 
-		case task.TypeRemoveLocalUser:
+		case task.TypeRemoveUnixLocalUser:
 			removeLinux, err := ansiblecfg.RemoveLocalUser(fmt.Sprintf("task_%d", t.ID), t.LocalUserForce, t.LocalUserUsername, t.IgnoreErrors)
 			if err != nil {
 				return nil, err
