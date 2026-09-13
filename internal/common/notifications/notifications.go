@@ -3,6 +3,7 @@ package notifications
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -10,7 +11,8 @@ import (
 	"github.com/open-uem/ent"
 	smtpsettings "github.com/open-uem/ent/settings"
 	"github.com/open-uem/nats"
-	"github.com/open-uem/utils"
+	"github.com/open-uem/nats/legacysecret"
+	"github.com/open-uem/nats/smtptransport"
 	"github.com/wneessen/go-mail"
 )
 
@@ -64,48 +66,42 @@ func PrepareMessage(notification *nats.Notification, settings *ent.Settings) (*m
 	return m, nil
 }
 
-func PrepareSMTPClient(settings *ent.Settings, encryptionMasterKey string) (*mail.Client, error) {
-	var err error
-	var c *mail.Client
+func PrepareSMTPClient(ctx context.Context, settings *ent.Settings, encryptionMasterKey string) (*mail.Client, func(), error) {
+	return prepareSMTPClient(ctx, settings, encryptionMasterKey, nil)
+}
 
-	smtpServer := strings.TrimSpace(settings.SMTPServer)
-
-	if settings.SMTPAuth == "NOAUTH" || (settings.SMTPUser == "" && settings.SMTPPassword == "") {
-		c, err = mail.NewClient(smtpServer, mail.WithPort(settings.SMTPPort))
-	} else {
-		// if smtp password is not empty check if we have the key to decrypt it
-		if settings.SMTPPassword != "" {
-			if encryptionMasterKey != "" {
-				isSMTPPasswordEncrypted, err := utils.IsSensitiveFieldEncrypted(settings.SMTPPassword, encryptionMasterKey)
-				if err != nil {
-					return nil, err
-				}
-
-				if isSMTPPasswordEncrypted {
-					settings.SMTPPassword, err = utils.DecryptSensitiveField(settings.SMTPPassword, encryptionMasterKey)
-					if err != nil {
-						return nil, err
-					}
-				}
-			}
-		}
-
-		c, err = mail.NewClient(smtpServer, mail.WithPort(settings.SMTPPort), mail.WithSMTPAuth(mail.SMTPAuthType(settings.SMTPAuth)),
-			mail.WithUsername(settings.SMTPUser), mail.WithPassword(settings.SMTPPassword))
+func prepareSMTPClient(ctx context.Context, settings *ent.Settings, encryptionMasterKey string, tlsOptions *tls.Config) (*mail.Client, func(), error) {
+	noop := func() {}
+	if settings == nil {
+		return nil, noop, fmt.Errorf("SMTP settings are unavailable")
 	}
-
+	password, err := legacysecret.Open(settings.SMTPPassword, encryptionMasterKey)
 	if err != nil {
-		return nil, err
+		return nil, noop, err
 	}
-
-	// manage encryption type
+	if tlsOptions == nil {
+		tlsOptions = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	tlsOptions = tlsOptions.Clone()
+	tlsOptions.ServerName = strings.TrimSpace(settings.SMTPServer)
+	var implicitTLS *tls.Config
 	if settings.SMTPEncryptionType == smtpsettings.SMTPEncryptionTypeSmtps {
-		c.SetSSL(true)
+		implicitTLS = tlsOptions
 	}
-
-	if settings.SMTPEncryptionType == smtpsettings.SMTPEncryptionTypeStarttls {
-		c.SetTLSPortPolicy(mail.TLSMandatory)
+	transport := smtptransport.New(ctx, implicitTLS)
+	options := []mail.Option{mail.WithPort(settings.SMTPPort), mail.WithTLSConfig(tlsOptions), mail.WithDialContextFunc(transport.DialContext)}
+	if settings.SMTPAuth != "NOAUTH" {
+		options = append(options, mail.WithSMTPAuth(mail.SMTPAuthType(settings.SMTPAuth)), mail.WithUsername(settings.SMTPUser), mail.WithPassword(password))
 	}
-
-	return c, nil
+	client, err := mail.NewClient(strings.TrimSpace(settings.SMTPServer), options...)
+	if err != nil {
+		transport.Close()
+		return nil, noop, err
+	}
+	if implicitTLS != nil {
+		client.SetSSL(true)
+	} else {
+		client.SetTLSPolicy(mail.TLSMandatory)
+	}
+	return client, transport.Close, nil
 }

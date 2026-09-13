@@ -1,7 +1,9 @@
 package common
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/open-uem/ent"
 )
@@ -10,7 +12,9 @@ func (w *Worker) SubscribeToNotificationWorkerQueues() error {
 	var err error
 
 	// read SMTP settings from database
-	w.Settings, err = w.Model.GetSMTPSettings()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = w.Model.GetSMTPSettings(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			log.Println("[INFO]: no SMTP settings found")
