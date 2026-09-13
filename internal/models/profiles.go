@@ -31,20 +31,40 @@ func profileScope(siteID, tenantID int) predicate.Profile {
 	)
 }
 
+// PostgreSQL resolves stored order ties by ID and keeps NULL values last.
+// Ent exposes nullable order as int, so project dense positions after loading:
+// the WinGet, Ansible and NetBird generators can then sort without losing NULL
+// placement. These positions belong only to the response; no rows are updated.
+func orderedProfileTasks(q *ent.TaskQuery) {
+	q.Order(task.ByOrder(), task.ByID())
+}
+
+func profileTaskPositions(profiles []*ent.Profile, err error) ([]*ent.Profile, error) {
+	if err != nil {
+		return nil, err
+	}
+	for _, profile := range profiles {
+		for index, task := range profile.Edges.Tasks {
+			task.Order = index + 1
+		}
+	}
+	return profiles, nil
+}
+
 func (m *Model) GetProfilesAppliedToAll(siteID, tenantID int) ([]*ent.Profile, error) {
-	return m.Client.Profile.Query().WithTasks().Where(profile.DisabledEQ(false), profile.ApplyToAll(true), profileScope(siteID, tenantID)).All(context.Background())
+	return profileTaskPositions(m.Client.Profile.Query().WithTasks(orderedProfileTasks).Where(profile.DisabledEQ(false), profile.ApplyToAll(true), profileScope(siteID, tenantID)).All(context.Background()))
 }
 
 func (m *Model) GetProfilesAppliedToAllFilteredByProfile(siteID, tenantID, profileID int) ([]*ent.Profile, error) {
-	return m.Client.Profile.Query().WithTasks().Where(profile.ID(profileID), profile.DisabledEQ(false), profile.ApplyToAll(true), profileScope(siteID, tenantID)).All(context.Background())
+	return profileTaskPositions(m.Client.Profile.Query().WithTasks(orderedProfileTasks).Where(profile.ID(profileID), profile.DisabledEQ(false), profile.ApplyToAll(true), profileScope(siteID, tenantID)).All(context.Background()))
 }
 
 func (m *Model) GetProfilesAppliedToAgent(siteID int, agentID string, tenantID int) ([]*ent.Profile, error) {
-	return m.Client.Profile.Query().WithTasks().Where(profile.DisabledEQ(false), profileScope(siteID, tenantID), profile.HasTagsWith(tag.HasOwnerWith(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))))).All(context.Background())
+	return profileTaskPositions(m.Client.Profile.Query().WithTasks(orderedProfileTasks).Where(profile.DisabledEQ(false), profileScope(siteID, tenantID), profile.HasTagsWith(tag.HasOwnerWith(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))))).All(context.Background()))
 }
 
 func (m *Model) GetProfilesAppliedToAgentFilteredByProfile(siteID int, agentID string, tenantID, profileID int) ([]*ent.Profile, error) {
-	return m.Client.Profile.Query().WithTasks().Where(profile.ID(profileID), profile.DisabledEQ(false), profileScope(siteID, tenantID), profile.HasTagsWith(tag.HasOwnerWith(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))))).All(context.Background())
+	return profileTaskPositions(m.Client.Profile.Query().WithTasks(orderedProfileTasks).Where(profile.ID(profileID), profile.DisabledEQ(false), profileScope(siteID, tenantID), profile.HasTagsWith(tag.HasOwnerWith(agent.ID(agentID), agent.HasSiteWith(site.ID(siteID))))).All(context.Background()))
 }
 
 func (m *Model) SaveProfileApplicationIssues(p nats.ProfileReport) error {
