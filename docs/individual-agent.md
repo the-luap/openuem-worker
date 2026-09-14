@@ -23,9 +23,22 @@ profile. Startup schema creation no longer drops columns or indexes owned by a
 newer component's additive migrations.
 
 The module pins the published shared implementation from
-`the-luap/openuem-nats` at `87aa1bdf56ea` using a Go module replacement, including
-the shared protected database/encryption input reader. Normal
+`the-luap/openuem-nats` at `2dbc458eb28c` using a Go module replacement, including
+the shared protected input reader and exact Linux enrollment/renewal targets. Normal
 builds and CI do not require a sibling checkout or a local `go.work` file.
+
+Linux identities use the same per-request active-scope, body/reply validation and
+revocation boundary. They do not acquire Mac hardware/FileVault or Windows software
+capabilities. The owned PostgreSQL/TLS-broker fixture now covers all three platforms
+and preserves each platform's separate capability checks. Native Linux package
+trust, endpoint enrollment-command admission and service activation remain agent
+integration requirements.
+
+With this shared pin, the complete owned Linux common/model race suites pass in
+3.329/2.471 seconds, including the three-platform TLS-broker fixture. Linux and
+Windows builds pass. The disposable fixture uses an internal PostgreSQL network,
+read-only source/module mounts and bounded compiler memory; no live enrollment or
+worker service is used. The common package has no macOS runtime implementation.
 
 ## Mac hardware evidence
 

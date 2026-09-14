@@ -33,7 +33,7 @@ import (
 )
 
 func TestIndividualWorkerRejectsForgedBodiesRepliesAndRevokedSenders(t *testing.T) {
-	for _, platform := range []string{"windows", "macos"} {
+	for _, platform := range []string{"windows", "macos", "linux"} {
 		t.Run(platform, func(t *testing.T) { testIndividualWorkerBoundary(t, platform) })
 	}
 }
@@ -361,7 +361,7 @@ func testIndividualWorkerBoundary(t *testing.T, platform string) {
 			t.Fatal(err)
 		}
 	} else if !strings.Contains(string(sendHardware(hardware)), "denied") {
-		t.Fatal("Windows identity wrote Mac evidence")
+		t.Fatal("non-Mac identity wrote Mac evidence")
 	}
 	softwarePoll := testIndividualSoftwareTransport(t, model.DB, store, client, *issued, keys, platform)
 	recoveryPoll, rotationPoll := testIndividualRecoveryTransport(t, model.DB, client, *issued, keys, platform)
