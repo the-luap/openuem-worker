@@ -33,7 +33,7 @@ func New(dbUrl string) (*Model, error) {
 	if os.Getenv("ENV") != "prod" {
 		// Startup must not remove columns or indexes owned by additive identity
 		// migrations or another component version in a rolling deployment.
-		if err := model.Client.Schema.Create(ctx); err != nil {
+		if err := model.Client.Schema.Create(ctx, metadataFieldScope()); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
